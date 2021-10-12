@@ -35,7 +35,7 @@ def test_normal_work(zenith_cli, pageserver: ZenithPageserver, postgres: Postgre
 # Run page server and multiple acceptors, and multiple compute nodes running
 # against different timelines.
 def test_many_timelines(zenith_cli, pageserver: ZenithPageserver, postgres: PostgresFactory, wa_factory):
-    n_timelines = 2
+    n_timelines = 20
 
     wa_factory.start_n_new(3)
 
