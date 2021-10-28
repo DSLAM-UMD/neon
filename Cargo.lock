@@ -2579,6 +2579,7 @@ dependencies = [
  "jsonwebtoken",
  "lazy_static",
  "nix",
+ "pin-project-lite",
  "postgres",
  "rand",
  "routerify",

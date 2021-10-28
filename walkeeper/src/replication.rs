@@ -88,7 +88,7 @@ impl ReplicationConn {
 
     /// Handle incoming messages from the network.
     /// This is spawned into the background by `handle_start_replication`.
-    fn background_thread(mut stream_in: impl Read, timeline: Arc<Timeline>) -> Result<()> {
+    fn background_thread(mut stream_in: impl Read + Unpin, timeline: Arc<Timeline>) -> Result<()> {
         let mut state = ReplicaState::new();
         let replica = timeline.add_replica(state);
         let _guard = ReplicationConnGuard {

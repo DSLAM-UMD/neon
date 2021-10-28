@@ -2,15 +2,13 @@
 //! <https://www.postgresql.org/docs/devel/protocol-message-formats.html>
 //! on message formats.
 
+use crate::sync::{AsyncishRead, SyncFuture};
 use anyhow::{anyhow, bail, Result};
-use byteorder::{BigEndian, ByteOrder};
-use byteorder::{ReadBytesExt, BE};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-// use postgres_ffi::xlog_utils::TimestampTz;
 use std::collections::HashMap;
-use std::io;
-use std::io::Read;
-use std::str;
+use std::future::Future;
+use std::{io, str};
+use tokio::io::AsyncReadExt;
 
 pub type Oid = u32;
 pub type SystemId = u64;
@@ -91,14 +89,14 @@ impl FeMessage {
     /// One way to handle this properly:
     ///
     /// ```
-    /// # use std::io::Read;
+    /// # use std::io;
     /// # use zenith_utils::pq_proto::FeMessage;
     /// #
     /// # fn process_message(msg: FeMessage) -> anyhow::Result<()> {
     /// #     Ok(())
     /// # };
     /// #
-    /// fn do_the_job(stream: &mut impl Read) -> anyhow::Result<()> {
+    /// fn do_the_job(stream: &mut (impl io::Read + Unpin)) -> anyhow::Result<()> {
     ///     while let Some(msg) = FeMessage::read(stream)? {
     ///         process_message(msg)?;
     ///     }
@@ -106,107 +104,137 @@ impl FeMessage {
     ///     Ok(())
     /// }
     /// ```
-    pub fn read(stream: &mut impl Read) -> anyhow::Result<Option<FeMessage>> {
-        // Each libpq message begins with a message type byte, followed by message length
-        // If the client closes the connection, return None. But if the client closes the
-        // connection in the middle of a message, we will return an error.
-        let tag = match stream.read_u8() {
-            Ok(b) => b,
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        let len = stream.read_u32::<BE>()?;
+    #[inline(never)]
+    pub fn read(stream: &mut (impl io::Read + Unpin)) -> anyhow::Result<Option<FeMessage>> {
+        Self::read_fut(&mut AsyncishRead(stream)).wait()
+    }
 
-        // The message length includes itself, so it better be at least 4
-        let bodylen = len
-            .checked_sub(4)
-            .ok_or_else(|| anyhow!("invalid message length: parsing u32"))?;
+    /// Read one message from the stream.
+    /// See documentation for `Self::read`.
+    pub fn read_fut<Reader>(
+        stream: &mut Reader,
+    ) -> SyncFuture<Reader, impl Future<Output = anyhow::Result<Option<FeMessage>>> + '_>
+    where
+        Reader: tokio::io::AsyncRead + Unpin,
+    {
+        SyncFuture::new(async move {
+            // Each libpq message begins with a message type byte, followed by message length
+            // If the client closes the connection, return None. But if the client closes the
+            // connection in the middle of a message, we will return an error.
+            let tag = match stream.read_u8().await {
+                Ok(b) => b,
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
+            let len = stream.read_u32().await?;
 
-        // Read message body
-        let mut body_buf: Vec<u8> = vec![0; bodylen as usize];
-        stream.read_exact(&mut body_buf)?;
+            // The message length includes itself, so it better be at least 4
+            let bodylen = len
+                .checked_sub(4)
+                .ok_or_else(|| anyhow!("invalid message length: parsing u32"))?;
 
-        let body = Bytes::from(body_buf);
+            // Read message body
+            let mut body_buf: Vec<u8> = vec![0; bodylen as usize];
+            stream.read_exact(&mut body_buf).await?;
 
-        // Parse it
-        match tag {
-            b'Q' => Ok(Some(FeMessage::Query(FeQueryMessage { body }))),
-            b'P' => Ok(Some(FeParseMessage::parse(body)?)),
-            b'D' => Ok(Some(FeDescribeMessage::parse(body)?)),
-            b'E' => Ok(Some(FeExecuteMessage::parse(body)?)),
-            b'B' => Ok(Some(FeBindMessage::parse(body)?)),
-            b'C' => Ok(Some(FeCloseMessage::parse(body)?)),
-            b'S' => Ok(Some(FeMessage::Sync)),
-            b'X' => Ok(Some(FeMessage::Terminate)),
-            b'd' => Ok(Some(FeMessage::CopyData(body))),
-            b'c' => Ok(Some(FeMessage::CopyDone)),
-            b'f' => Ok(Some(FeMessage::CopyFail)),
-            b'p' => Ok(Some(FeMessage::PasswordMessage(body))),
-            tag => Err(anyhow!("unknown message tag: {},'{:?}'", tag, body)),
-        }
+            let body = Bytes::from(body_buf);
+
+            // Parse it
+            match tag {
+                b'Q' => Ok(Some(FeMessage::Query(FeQueryMessage { body }))),
+                b'P' => Ok(Some(FeParseMessage::parse(body)?)),
+                b'D' => Ok(Some(FeDescribeMessage::parse(body)?)),
+                b'E' => Ok(Some(FeExecuteMessage::parse(body)?)),
+                b'B' => Ok(Some(FeBindMessage::parse(body)?)),
+                b'C' => Ok(Some(FeCloseMessage::parse(body)?)),
+                b'S' => Ok(Some(FeMessage::Sync)),
+                b'X' => Ok(Some(FeMessage::Terminate)),
+                b'd' => Ok(Some(FeMessage::CopyData(body))),
+                b'c' => Ok(Some(FeMessage::CopyDone)),
+                b'f' => Ok(Some(FeMessage::CopyFail)),
+                b'p' => Ok(Some(FeMessage::PasswordMessage(body))),
+                tag => Err(anyhow!("unknown message tag: {},'{:?}'", tag, body)),
+            }
+        })
     }
 }
 
 impl FeStartupMessage {
     /// Read startup message from the stream.
-    pub fn read(stream: &mut impl std::io::Read) -> anyhow::Result<Option<FeMessage>> {
+    // XXX: It's tempting yet undesirable to accept `stream` by value,
+    // since such a change will cause user-supplied &mut references to be consumed
+    pub fn read(stream: &mut (impl io::Read + Unpin)) -> anyhow::Result<Option<FeMessage>> {
+        Self::read_fut(&mut AsyncishRead(stream)).wait()
+    }
+
+    /// Read startup message from the stream.
+    // XXX: It's tempting yet undesirable to accept `stream` by value,
+    // since such a change will cause user-supplied &mut references to be consumed
+    pub fn read_fut<Reader>(
+        stream: &mut Reader,
+    ) -> SyncFuture<Reader, impl Future<Output = anyhow::Result<Option<FeMessage>>> + '_>
+    where
+        Reader: tokio::io::AsyncRead + Unpin,
+    {
         const MAX_STARTUP_PACKET_LENGTH: usize = 10000;
         const CANCEL_REQUEST_CODE: u32 = (1234 << 16) | 5678;
         const NEGOTIATE_SSL_CODE: u32 = (1234 << 16) | 5679;
         const NEGOTIATE_GSS_CODE: u32 = (1234 << 16) | 5680;
 
-        // Read length. If the connection is closed before reading anything (or before
-        // reading 4 bytes, to be precise), return None to indicate that the connection
-        // was closed. This matches the PostgreSQL server's behavior, which avoids noise
-        // in the log if the client opens connection but closes it immediately.
-        let len = match stream.read_u32::<BE>() {
-            Ok(len) => len as usize,
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
+        SyncFuture::new(async move {
+            // Read length. If the connection is closed before reading anything (or before
+            // reading 4 bytes, to be precise), return None to indicate that the connection
+            // was closed. This matches the PostgreSQL server's behavior, which avoids noise
+            // in the log if the client opens connection but closes it immediately.
+            let len = match stream.read_u32().await {
+                Ok(len) => len as usize,
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
 
-        if len < 4 || len > MAX_STARTUP_PACKET_LENGTH {
-            bail!("invalid message length");
-        }
-
-        let version = stream.read_u32::<BE>()?;
-        let kind = match version {
-            CANCEL_REQUEST_CODE => StartupRequestCode::Cancel,
-            NEGOTIATE_SSL_CODE => StartupRequestCode::NegotiateSsl,
-            NEGOTIATE_GSS_CODE => StartupRequestCode::NegotiateGss,
-            _ => StartupRequestCode::Normal,
-        };
-
-        // the rest of startup packet are params
-        let params_len = len - 8;
-        let mut params_bytes = vec![0u8; params_len];
-        stream.read_exact(params_bytes.as_mut())?;
-
-        // Then null-terminated (String) pairs of param name / param value go.
-        let params_str = str::from_utf8(&params_bytes).unwrap();
-        let params = params_str.split('\0');
-        let mut params_hash: HashMap<String, String> = HashMap::new();
-        for pair in params.collect::<Vec<_>>().chunks_exact(2) {
-            let name = pair[0];
-            let value = pair[1];
-            if name == "options" {
-                // deprecated way of passing params as cmd line args
-                for cmdopt in value.split(' ') {
-                    let nameval: Vec<&str> = cmdopt.split('=').collect();
-                    if nameval.len() == 2 {
-                        params_hash.insert(nameval[0].to_string(), nameval[1].to_string());
-                    }
-                }
-            } else {
-                params_hash.insert(name.to_string(), value.to_string());
+            if len < 4 || len > MAX_STARTUP_PACKET_LENGTH {
+                bail!("invalid message length");
             }
-        }
 
-        Ok(Some(FeMessage::StartupMessage(FeStartupMessage {
-            version,
-            kind,
-            params: params_hash,
-        })))
+            let version = stream.read_u32().await?;
+            let kind = match version {
+                CANCEL_REQUEST_CODE => StartupRequestCode::Cancel,
+                NEGOTIATE_SSL_CODE => StartupRequestCode::NegotiateSsl,
+                NEGOTIATE_GSS_CODE => StartupRequestCode::NegotiateGss,
+                _ => StartupRequestCode::Normal,
+            };
+
+            // the rest of startup packet are params
+            let params_len = len - 8;
+            let mut params_bytes = vec![0u8; params_len];
+            stream.read_exact(&mut params_bytes).await?;
+
+            // Then null-terminated (String) pairs of param name / param value go.
+            let params_str = str::from_utf8(&params_bytes).unwrap();
+            let params = params_str.split('\0');
+            let mut params_hash: HashMap<String, String> = HashMap::new();
+            for pair in params.collect::<Vec<_>>().chunks_exact(2) {
+                let name = pair[0];
+                let value = pair[1];
+                if name == "options" {
+                    // deprecated way of passing params as cmd line args
+                    for cmdopt in value.split(' ') {
+                        let nameval: Vec<&str> = cmdopt.split('=').collect();
+                        if nameval.len() == 2 {
+                            params_hash.insert(nameval[0].to_string(), nameval[1].to_string());
+                        }
+                    }
+                } else {
+                    params_hash.insert(name.to_string(), value.to_string());
+                }
+            }
+
+            Ok(Some(FeMessage::StartupMessage(FeStartupMessage {
+                version,
+                kind,
+                params: params_hash,
+            })))
+        })
     }
 }
 
@@ -467,7 +495,7 @@ where
     f(buf)?;
 
     let size = i32::from_usize(buf.len() - base)?;
-    BigEndian::write_i32(&mut buf[base..], size);
+    (&mut buf[base..]).put_slice(&size.to_be_bytes());
     Ok(())
 }
 
@@ -743,5 +771,19 @@ impl<'a> BeMessage<'a> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Make sure that `read` is sync/async callable
+    async fn _assert(stream: &mut (impl tokio::io::AsyncRead + Unpin)) {
+        let _ = FeMessage::read(&mut [].as_ref());
+        let _ = FeMessage::read_fut(stream).await;
+
+        let _ = FeStartupMessage::read(&mut [].as_ref());
+        let _ = FeStartupMessage::read_fut(stream).await;
     }
 }
