@@ -11,6 +11,9 @@ pub mod seqwait;
 /// append only ordered map implemented with a Vec
 pub mod vec_map;
 
+/// multi-layered bitmap implementation
+pub mod multi_bitmap;
+
 // Async version of SeqWait. Currently unused.
 // pub mod seqwait_async;
 

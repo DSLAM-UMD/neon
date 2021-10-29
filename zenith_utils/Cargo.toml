@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0"
 bincode = "1.3"
+bitmaps = { git = "https://github.com/mmeent/bitmaps.git", branch = "feature/iterative-improvements" }
 byteorder = "1.4.3"
 bytes = "1.0.1"
 hyper = { version = "0.14.7", features = ["full"] }
