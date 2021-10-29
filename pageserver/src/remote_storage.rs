@@ -69,7 +69,7 @@
 //! * the uploads do not happen right after the upload registration: the sync loop might be occupied with other tasks, or tasks with bigger priority could be waiting already
 
 mod local_fs;
-mod rust_s3;
+mod rusoto_s3;
 mod storage_sync;
 
 use std::{
@@ -85,7 +85,7 @@ use tracing::{error, info};
 use zenith_utils::zid::{ZTenantId, ZTimelineId};
 
 pub use self::storage_sync::{schedule_timeline_checkpoint_upload, schedule_timeline_download};
-use self::{local_fs::LocalFs, rust_s3::S3};
+use self::{local_fs::LocalFs, rusoto_s3::RusotoS3};
 use crate::{
     layered_repository::metadata::{TimelineMetadata, METADATA_FILE_NAME},
     repository::TimelineState,
@@ -129,7 +129,7 @@ pub fn start_local_timeline_sync(
             RemoteStorageKind::AwsS3(s3_config) => storage_sync::spawn_storage_sync_thread(
                 config,
                 local_timeline_files,
-                S3::new(s3_config, &config.workdir)?,
+                RusotoS3::new(s3_config, &config.workdir)?,
                 storage_config.max_concurrent_sync,
                 storage_config.max_sync_errors,
             ),
