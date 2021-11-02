@@ -164,12 +164,11 @@ impl RemoteStorage for LocalFs {
                 start_inclusive,
                 end_exclusive
             );
-            if start_inclusive == end_exclusive.saturating_sub(1) {
+            if start_inclusive == end_exclusive - 1 {
                 return Ok(());
             }
         }
         let file_path = self.resolve_in_storage(from)?;
-
         if file_path.exists() && file_path.is_file() {
             let mut source = io::BufReader::new(
                 fs::OpenOptions::new()
@@ -355,7 +354,7 @@ mod pure_tests {
                 .local_path(
                     &storage_root.join(local_path.strip_prefix(&repo_harness.conf.workdir)?)
                 )
-                .expect("For a valid input, valid S3 info should be parsed"),
+                .expect("For a valid input, valid local path should be parsed"),
             "Should be able to parse metadata out of the correctly named remote delta file"
         );
 
