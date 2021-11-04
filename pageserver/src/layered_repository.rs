@@ -130,8 +130,7 @@ pub struct LayeredRepository {
     timelines: Mutex<HashMap<ZTimelineId, Arc<LayeredTimeline>>>,
 
     walredo_mgr: Arc<dyn WalRedoManager + Send + Sync>,
-    /// Makes evey repo's timelines to backup their files to remote storage,
-    /// when they get frozen.
+    /// Makes every timeline to backup their files to remote storage.
     upload_relishes: bool,
 }
 
@@ -319,6 +318,7 @@ impl LayeredRepository {
                 // TODO: If you have a very deep timeline history, this could become
                 // expensive. Perhaps delay this until we need to look up a page in
                 // ancestor.
+                // TODO kb that has to be solved for download on demand
                 let ancestor = if let Some(ancestor_timelineid) = metadata.ancestor_timeline() {
                     Some(self.get_timeline_locked(ancestor_timelineid, timelines)?)
                 } else {
@@ -340,18 +340,9 @@ impl LayeredRepository {
                     self.upload_relishes,
                 )?;
 
-                // List the layers on disk, and load them into the layer map
-                let loaded_layers = timeline
+                timeline
                     .load_layer_map(disk_consistent_lsn)
                     .context("failed to load layermap")?;
-                if self.upload_relishes {
-                    schedule_timeline_checkpoint_upload(
-                        self.tenantid,
-                        timelineid,
-                        loaded_layers,
-                        metadata,
-                    );
-                }
 
                 // needs to be after load_layer_map
                 timeline.init_current_logical_size()?;
@@ -606,7 +597,7 @@ pub struct LayeredTimeline {
     // ordering for its operations, but involves private modules, and macro trickery
     current_logical_size_gauge: IntGauge,
 
-    /// If `true`, will backup its timeline files to remote storage after freezing.
+    /// If `true`, will backup its files that appear after each checkpointing to the remote storage.
     upload_relishes: bool,
 
     /// Ensures layers aren't frozen by checkpointer between
@@ -975,14 +966,13 @@ impl LayeredTimeline {
     /// Scan the timeline directory to populate the layer map.
     /// Returns all timeline-related files that were found and loaded.
     ///
-    fn load_layer_map(&self, disk_consistent_lsn: Lsn) -> anyhow::Result<Vec<PathBuf>> {
+    fn load_layer_map(&self, disk_consistent_lsn: Lsn) -> anyhow::Result<()> {
         let mut layers = self.layers.lock().unwrap();
         let mut num_layers = 0;
         let (imgfilenames, deltafilenames) =
             filename::list_files(self.conf, self.timelineid, self.tenantid)?;
 
         let timeline_path = self.conf.timeline_path(&self.timelineid, &self.tenantid);
-        let mut local_layers = Vec::with_capacity(imgfilenames.len() + deltafilenames.len());
         // First create ImageLayer structs for each image file.
         for filename in &imgfilenames {
             if filename.lsn > disk_consistent_lsn {
@@ -998,7 +988,6 @@ impl LayeredTimeline {
             let layer = ImageLayer::new(self.conf, self.timelineid, self.tenantid, filename);
 
             trace!("found layer {}", layer.filename().display());
-            local_layers.push(layer.path());
             layers.insert_historic(Arc::new(layer));
             num_layers += 1;
         }
@@ -1023,13 +1012,12 @@ impl LayeredTimeline {
             let layer = DeltaLayer::new(self.conf, self.timelineid, self.tenantid, filename);
 
             trace!("found layer {}", layer.filename().display());
-            local_layers.push(layer.path());
             layers.insert_historic(Arc::new(layer));
             num_layers += 1;
         }
         info!("loaded layer map with {} layers", num_layers);
 
-        Ok(local_layers)
+        Ok(())
     }
 
     ///
