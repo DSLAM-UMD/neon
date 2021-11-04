@@ -73,17 +73,23 @@ mod rust_s3;
 mod storage_sync;
 
 use std::{
+    collections::{hash_map, HashMap, HashSet},
+    ffi, fs,
     path::{Path, PathBuf},
     thread,
 };
 
-use anyhow::Context;
+use anyhow::{bail, ensure, Context};
 use tokio::io;
+use tracing::error;
 use zenith_utils::zid::{ZTenantId, ZTimelineId};
 
 pub use self::storage_sync::schedule_timeline_checkpoint_upload;
 use self::{local_fs::LocalFs, rust_s3::S3};
-use crate::{PageServerConf, RemoteStorageKind};
+use crate::{
+    layered_repository::metadata::{TimelineMetadata, METADATA_FILE_NAME},
+    PageServerConf, RemoteStorageKind,
+};
 
 /// Any timeline has its own id and its own tenant it belongs to,
 /// the sync processes group timelines by both for simplicity.
@@ -96,6 +102,9 @@ pub struct TimelineSyncId(ZTenantId, ZTimelineId);
 pub fn run_storage_sync_thread(
     config: &'static PageServerConf,
 ) -> anyhow::Result<Option<thread::JoinHandle<anyhow::Result<()>>>> {
+    let local_timeline_files = local_tenant_timeline_files(config)
+        .context("Failed to collect local tenant timeline files")?;
+
     match &config.remote_storage_config {
         Some(storage_config) => {
             let max_concurrent_sync = storage_config.max_concurrent_sync;
@@ -103,12 +112,14 @@ pub fn run_storage_sync_thread(
             let handle = match &storage_config.storage {
                 RemoteStorageKind::LocalFs(root) => storage_sync::spawn_storage_sync_thread(
                     config,
+                    local_timeline_files,
                     LocalFs::new(root.clone(), &config.workdir)?,
                     max_concurrent_sync,
                     max_sync_errors,
                 ),
                 RemoteStorageKind::AwsS3(s3_config) => storage_sync::spawn_storage_sync_thread(
                     config,
+                    local_timeline_files,
                     S3::new(s3_config, &config.workdir)?,
                     max_concurrent_sync,
                     max_sync_errors,
@@ -118,6 +129,140 @@ pub fn run_storage_sync_thread(
         }
         None => Ok(None),
     }
+}
+
+fn local_tenant_timeline_files(
+    config: &'static PageServerConf,
+) -> anyhow::Result<HashMap<(ZTenantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)>> {
+    let mut local_tenant_timeline_files = HashMap::new();
+    let tenants_dir = config.tenants_path();
+    for tenants_dir_entry in fs::read_dir(&tenants_dir)
+        .with_context(|| format!("Failed to list tenants dir {}", tenants_dir.display()))?
+    {
+        match &tenants_dir_entry {
+            Ok(tenants_dir_entry) => {
+                match collect_timelines_for_tenant(config, &tenants_dir_entry.path()) {
+                    Ok(collected_files) => {
+                        local_tenant_timeline_files.extend(collected_files.into_iter())
+                    }
+                    Err(e) => error!(
+                        "Failed to collect tenant files from dir '{}' for entry {:?}, reason: {:#}",
+                        tenants_dir.display(),
+                        tenants_dir_entry,
+                        e
+                    ),
+                }
+            }
+            Err(e) => error!(
+                "Failed to list tenants dir entry {:?} in directory {}, reason: {:#}",
+                tenants_dir_entry,
+                tenants_dir.display(),
+                e
+            ),
+        }
+    }
+
+    Ok(local_tenant_timeline_files)
+}
+
+fn collect_timelines_for_tenant(
+    config: &'static PageServerConf,
+    tenant_path: &Path,
+) -> anyhow::Result<HashMap<(ZTenantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)>> {
+    let mut timelines: HashMap<(ZTenantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)> =
+        HashMap::new();
+    let tenant_id = tenant_path
+        .file_name()
+        .and_then(ffi::OsStr::to_str)
+        .unwrap_or_default()
+        .parse::<ZTenantId>()
+        .context("Could not parse tenant id out of the tenant dir name")?;
+    let timelines_dir = config.timelines_path(&tenant_id);
+
+    for timelines_dir_entry in fs::read_dir(&timelines_dir).with_context(|| {
+        format!(
+            "Failed to list timelines dir entry for tenant {}",
+            tenant_id
+        )
+    })? {
+        match timelines_dir_entry {
+            Ok(timelines_dir_entry) => {
+                let timeline_path = timelines_dir_entry.path();
+                match process_timeline_dir_contents(&timeline_path) {
+                    Ok((timeline_id, metadata, timeline_files)) => {
+                        match timelines.entry((tenant_id, timeline_id)) {
+                            hash_map::Entry::Occupied(mut o) => {
+                                let (old_metadata, paths) = o.get_mut();
+                                ensure!(old_metadata == &metadata, "For timeline path '{}', found multiple metadata files, first: {:?}, second: {:?}", timeline_path.display(), old_metadata, metadata);
+                                paths.extend(timeline_files.into_iter());
+                            }
+                            hash_map::Entry::Vacant(v) => {
+                                v.insert((metadata, timeline_files));
+                            }
+                        }
+                    }
+                    Err(e) => error!(
+                        "Failed to process timeline dir contents at '{}', reason: {:#}",
+                        timeline_path.display(),
+                        e
+                    ),
+                }
+            }
+            Err(e) => error!(
+                "Failed to list timelines for entry tenant {}, reason: {:#}",
+                tenant_id, e
+            ),
+        }
+    }
+
+    Ok(timelines)
+}
+
+fn process_timeline_dir_contents(
+    timeline_dir: &Path,
+) -> anyhow::Result<(ZTimelineId, TimelineMetadata, HashSet<PathBuf>)> {
+    let mut timeline_files = HashSet::new();
+    let mut timeline_metadata_path = None;
+
+    let timeline_id = timeline_dir
+        .file_name()
+        .and_then(ffi::OsStr::to_str)
+        .unwrap_or_default()
+        .parse::<ZTimelineId>()
+        .context("Could not parse timeline id out of the timeline dir name")?;
+    let timeline_dir_entries =
+        fs::read_dir(&timeline_dir).context("Failed to list timeline dir contents")?;
+    let mut entries_to_traverse = vec![timeline_dir_entries];
+    while let Some(dir_entries) = entries_to_traverse.pop() {
+        for entry in dir_entries {
+            let entry_path = entry.context("Failed to list timeline dir entry")?.path();
+            if entry_path.is_dir() {
+                entries_to_traverse.push(fs::read_dir(&entry_path).with_context(|| {
+                    format!(
+                        "Failed to list contents for timeline subdir '{}'",
+                        entry_path.display()
+                    )
+                })?);
+            } else if entry_path.is_file() {
+                if entry_path.file_name().and_then(ffi::OsStr::to_str) == Some(METADATA_FILE_NAME) {
+                    timeline_metadata_path = Some(entry_path);
+                } else {
+                    timeline_files.insert(entry_path);
+                }
+            }
+        }
+    }
+
+    let timeline_metadata_path = match timeline_metadata_path {
+        Some(path) => path,
+        None => bail!("No metadata file found in the timeline directory"),
+    };
+    let metadata = TimelineMetadata::from_bytes(
+        &fs::read(&timeline_metadata_path).context("Failed to read timeline metadata file")?,
+    )
+    .context("Failed to parse timeline metadata file bytes")?;
+
+    Ok((timeline_id, metadata, timeline_files))
 }
 
 /// Storage (potentially remote) API to manage its state.

@@ -54,7 +54,7 @@ mod compression;
 pub mod index;
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     num::{NonZeroU32, NonZeroUsize},
     ops::{Deref, DerefMut},
     path::PathBuf,
@@ -274,6 +274,7 @@ pub(super) fn spawn_storage_sync_thread<
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     config: &'static PageServerConf,
+    local_timeline_files: HashMap<(ZTenantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)>,
     remote_storage: S,
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
@@ -287,6 +288,7 @@ pub(super) fn spawn_storage_sync_thread<
             let thread_result = storage_sync_loop(
                 config,
                 receiver,
+                local_timeline_files,
                 remote_storage,
                 max_concurrent_sync,
                 max_sync_errors,
@@ -305,6 +307,7 @@ fn storage_sync_loop<
 >(
     config: &'static PageServerConf,
     mut receiver: UnboundedReceiver<SyncTask>,
+    local_timeline_files: HashMap<(ZTenantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)>,
     remote_storage: S,
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
@@ -316,7 +319,9 @@ fn storage_sync_loop<
         .block_on(index::reconstruct_from_storage(&remote_storage))
         .context("Failed to determine previously uploaded timelines")?;
 
-    schedule_first_tasks(config, &remote_timelines);
+    // TODO kb the return value has to be the info about local timelines (which to bail, pause or run) and located one level up.
+    let local_timeline_actions =
+        schedule_first_tasks(config, &remote_timelines, &local_timeline_files);
 
     // TODO kb return it back under a single Arc?
     let remote_storage = Arc::new(remote_storage);
@@ -475,7 +480,9 @@ async fn process_task<
 fn schedule_first_tasks(
     config: &'static PageServerConf,
     remote_timelines: &HashMap<TimelineSyncId, RemoteTimeline>,
+    local_timeline_files: &HashMap<(ZTenantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)>,
 ) {
+    // TODO kb deterime the diff between remote and loca timelines. Schedule urgent downloads, uploads and prepare data for local timeline init.
     for (&sync_id, timeline) in remote_timelines {
         if !config.timeline_path(&sync_id.1, &sync_id.0).exists() {
             sync_queue::push(SyncTask::new(
