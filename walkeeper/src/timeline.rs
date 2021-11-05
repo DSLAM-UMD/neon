@@ -622,7 +622,7 @@ impl Storage for FileStorage {
             .conf
             .workdir
             .join(ztli.to_string())
-            .join(wal_file_name.clone() + ".partial");
+            .join(wal_file_name + ".partial");
         {
             let mut wal_file: File;
             /* Try to open already completed segment */

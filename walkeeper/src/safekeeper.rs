@@ -76,7 +76,7 @@ impl TermHistory {
             if e.lsn > up_to {
                 break;
             }
-            res.push(e.clone());
+            res.push(*e);
         }
         TermHistory(res)
     }
@@ -501,6 +501,7 @@ where
         self.s.acceptor_state.term_history.up_to(self.flush_lsn)
     }
 
+    #[cfg(test)]
     fn get_epoch(&self) -> Term {
         self.s.acceptor_state.get_epoch(self.flush_lsn)
     }
@@ -778,7 +779,8 @@ mod tests {
         }
     }
 
-    // #[test]
+    #[test]
+    #[ignore]
     fn test_voting() {
         let storage = InMemoryStorage {
             persisted_state: SafeKeeperState::new(),
@@ -808,7 +810,8 @@ mod tests {
         }
     }
 
-    // #[test]
+    #[test]
+    #[ignore]
     fn test_epoch_switch() {
         let storage = InMemoryStorage {
             persisted_state: SafeKeeperState::new(),
