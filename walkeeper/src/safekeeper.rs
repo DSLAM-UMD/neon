@@ -273,7 +273,7 @@ pub struct AppendResponse {
 impl AppendResponse {
     fn term_only(term: Term) -> AppendResponse {
         AppendResponse {
-            term: term,
+            term,
             flush_lsn: Lsn(0),
             commit_lsn: Lsn(0),
             disk_consistent_lsn: Lsn(0),
