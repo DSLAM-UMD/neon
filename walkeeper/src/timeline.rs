@@ -612,7 +612,7 @@ impl Storage for FileStorage {
         /* Open file */
         let mut segno = end_pos.segment_number(wal_seg_size);
         // note: we basically don't support changing pg timeline
-        let wal_file_name = XLogFileName(server.tli, segno, wal_seg_size);
+        let wal_file_name = XLogFileName(PG_TLI, segno, wal_seg_size);
         let wal_file_path = self
             .conf
             .workdir
@@ -653,7 +653,7 @@ impl Storage for FileStorage {
         // Remove all subsequent segments
         loop {
             segno += 1;
-            let wal_file_name = XLogFileName(server.tli, segno, wal_seg_size);
+            let wal_file_name = XLogFileName(PG_TLI, segno, wal_seg_size);
             let wal_file_path = self
                 .conf
                 .workdir
