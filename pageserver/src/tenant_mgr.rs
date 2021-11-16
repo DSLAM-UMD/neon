@@ -3,7 +3,8 @@
 
 use crate::branches;
 use crate::layered_repository::LayeredRepository;
-use crate::repository::{Repository, Timeline};
+use crate::remote_storage::TimelineSyncId;
+use crate::repository::{Repository, Timeline, TimelineState};
 use crate::tenant_threads;
 use crate::walredo::PostgresRedoManager;
 use crate::PageServerConf;
@@ -78,7 +79,10 @@ fn access_tenants() -> MutexGuard<'static, HashMap<ZTenantId, Tenant>> {
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-pub fn init(conf: &'static PageServerConf) {
+pub fn init(
+    conf: &'static PageServerConf,
+    initial_timeline_state: HashMap<TimelineSyncId, TimelineState>,
+) {
     for dir_entry in fs::read_dir(conf.tenants_path()).unwrap() {
         let tenantid =
             ZTenantId::from_str(dir_entry.unwrap().file_name().to_str().unwrap()).unwrap();

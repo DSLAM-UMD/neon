@@ -561,72 +561,15 @@ fn start_pageserver(conf: &'static PageServerConf) -> Result<()> {
     let signals = signals::install_shutdown_handlers()?;
     let mut threads = Vec::new();
 
-    // TODO kb for every local timeline [file_1, file_2, ..., file_k, metadata], need to know its remote counterpart comparison
-    // and register the timeline afterwards.
-    //
-    // ------------------------------- Data flow
-    //
-    // * first, the sync loop is started, returning the data about the remote timelines,
-    // `HashMap<(ZTetantId, ZTimelineId), RemoteTimeline>` wrapped into some `RemoteIndex` struct for helper methods
-    // (the loop is disabled by default, consider API options to resemble that in the return value)
-    // * then, the local scan is done for all the tenants and their timelines, returning smth. like
-    // `HashMap<(ZTetantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)>`
-    // * `RemoteIndex`-like wrapper should be able to compare timelines and derive:
-    //     * urgent downloads (disables a timeline before that happens)
-    //     * first uploads
-    //     * weird situations (needs timeline disabling)
-    // * sync loop gets its first sync tasks (urgent downloads first, then uploads)
-    // * tenant_mgr gets its tenant and timeline registration data (some timelines could be disabled or bailed out)
-    //
-    //
-    // ------------------------------- Timeline comparison
-    // !!! Timelines should have all fields equal, except the `disk_consistent_lsn` one.
-    //
-    // * local metadata's disk_consistent_lsn == last remote Lsn
-    //     * some remote files are not downloaded: good since locals are just GC'ed? Ignore for now, add defragmentaion task later.
-    //     * some local files are not uploaded: ok? could be a new timeline that was not persisted on disk entirely.
-    //                                          Due to timeline init laziness, cannot rely on checkpoints ever happen before the server crashes, is it ok?
-    //     * file sets match: all fine, wait for checkpoints
-    //
-    // * local metadata's disk_consistent_lsn > last remote Lsn
-    //     * some remote files are not downloaded: good since locals are just GC'ed? Ignore for now, add defragmentaion task later.
-    //     * some local files are not uploaded: ok, schedule their upload under the new Lsn
-    //     * file sets match: weird, swear in the logs and do nothing for now,
-    //                        consider deframentation for later: reuploading entire timeline under the new checkpoint and removing others
-    //
-    // * local metadata's disk_consistent_lsn < last remote Lsn
-    //     * no archive with the local Lsn? Horrendous now (bail?), but ok when defragmentation is added.
-    //     * some remote files are not downloaded:
-    //         * from an archive with Lsn < local one: good since locals are just GC'ed? Ignore for now, add defragmentaion task later.
-    //         * from an archive with Lsn >= local one: download the missing files
-    //     * some local files are not uploaded: horrendous, reupload the last remote Lsn archive? which name to use?
-    //     * file sets match: weird, swear in the logs and propagate the timeline to further Lsn to avoid conflicts?
-    //
-    // * no metadata file: bail on the timeline
-    //
-    // ------------------------------ Timeline registration
-    // !!! We're not supposed to register a download for the timeline, already active: the download either happens on
-    // * on a local timeline, detected to be outdated on startup (hence not activated)
-    // * on a remote-only timeline, demanded via api
-    //
-    // For a local timeline, add its state to repository's LayerMap.
-    // State could be:
-    //
-    // * `on cloud`: present remotely only, can be downloaded on demand
-    // * `needs_download`: present locally and remotely, needs synchronisation before could be used safely
-    // * `bailed`: remote and local state mismatch, disabled to not to cause any further harm
-    // * `ok`: remote state matches the local one, at least partially (further uploads may be scheduled, but they don't prevent using the timeline)
-    //
-    // Tenant addition might be required, all operations should go through `tenant_mgr`.
-    //-------------------------------
-    //
+    let (initial_timeline_state, handle) = remote_storage::start_local_timeline_sync(conf)
+        .context("Failed to set up local files sync with external storage")?;
 
-    // Initialize tenant manager.
-    tenant_mgr::init(conf);
-
-    if let Some(handle) = remote_storage::run_storage_sync_thread(conf)? {
+    if let Some(handle) = handle {
         threads.push(handle);
     }
+
+    // Initialize tenant manager.
+    tenant_mgr::init(conf, initial_timeline_state);
 
     // initialize authentication for incoming connections
     let auth = match &conf.auth_type {
