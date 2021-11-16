@@ -91,7 +91,7 @@ pub struct AcceptorState {
     /// acceptor's last term it voted for (advanced in 1 phase)
     pub term: Term,
     /// History of term switches for safekeeper's WAL.
-    /// Actually it often goes *beyond* WAL contents as we adopp term history
+    /// Actually it often goes *beyond* WAL contents as we adopt term history
     /// from the proposer before recovery.
     pub term_history: TermHistory,
 }
@@ -237,7 +237,8 @@ pub struct AppendRequest {
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppendRequestHeader {
-    pub term: Term, // safekeeper's current term; if it is higher than proposer's, the compute is out of date.
+    // safekeeper's current term; if it is higher than proposer's, the compute is out of date.
+    pub term: Term,
     // LSN since the proposer appends WAL; determines epoch switch point.
     pub epoch_start_lsn: Lsn,
     /// start position of message in WAL
@@ -473,8 +474,7 @@ pub struct SafeKeeper<ST: Storage> {
     pub commit_lsn: Lsn,
     pub truncate_lsn: Lsn,
     pub storage: ST,
-    pub s: SafeKeeperState,          // persistent part
-    pub elected_proposer_term: Term, // for monitoring/debugging
+    pub s: SafeKeeperState, // persistent part
     decoder: WalStreamDecoder,
 }
 
@@ -491,7 +491,6 @@ where
             truncate_lsn: state.truncate_lsn,
             storage,
             s: state,
-            elected_proposer_term: 0,
             decoder: WalStreamDecoder::new(Lsn(0)),
         }
     }
@@ -613,9 +612,9 @@ where
     }
 
     fn handle_elected(&mut self, msg: &ProposerElected) -> Result<Option<AcceptorProposerMessage>> {
-        info!("got elected {:?}", msg);
+        info!("received ProposerElected {:?}", msg);
         self.bump_if_higher(msg.term)?;
-        // If our term is higher, ignore he message (next feedback will inform the compute)
+        // If our term is higher, ignore the message (next feedback will inform the compute)
         if self.s.acceptor_state.term > msg.term {
             return Ok(None);
         }
@@ -633,6 +632,8 @@ where
         self.s.acceptor_state.term_history = msg.term_history.clone();
         self.storage.persist(&self.s, true)?;
 
+        info!("start receiving WAL since {:?}", msg.start_streaming_at);
+
         Ok(None)
     }
 
@@ -642,15 +643,6 @@ where
         &mut self,
         msg: &AppendRequest,
     ) -> Result<Option<AcceptorProposerMessage>> {
-        // log first AppendRequest from this proposer
-        if self.elected_proposer_term < msg.h.term {
-            info!(
-                "start accepting WAL from timeline {}, tenant {}, term {}",
-                self.s.server.ztli, self.s.server.tenant_id, msg.h.term,
-            );
-            self.elected_proposer_term = msg.h.term;
-        }
-
         self.bump_if_higher(msg.h.term)?;
 
         // If our term is higher, immediately refuse the message.
