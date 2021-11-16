@@ -81,13 +81,14 @@ use std::{
 
 use anyhow::{bail, ensure, Context};
 use tokio::io;
-use tracing::error;
+use tracing::{error, info};
 use zenith_utils::zid::{ZTenantId, ZTimelineId};
 
 pub use self::storage_sync::schedule_timeline_checkpoint_upload;
 use self::{local_fs::LocalFs, rust_s3::S3};
 use crate::{
     layered_repository::metadata::{TimelineMetadata, METADATA_FILE_NAME},
+    repository::TimelineState,
     PageServerConf, RemoteStorageKind,
 };
 
@@ -99,9 +100,12 @@ pub struct TimelineSyncId(ZTenantId, ZTimelineId);
 /// Based on the config, initiates the remote storage connection and starts a separate thread
 /// that ensures that pageserver and the remote storage are in sync with each other.
 /// If no external configuraion connection given, no thread or storage initialization is done.
-pub fn run_storage_sync_thread(
+pub fn start_local_timeline_sync(
     config: &'static PageServerConf,
-) -> anyhow::Result<Option<thread::JoinHandle<anyhow::Result<()>>>> {
+) -> anyhow::Result<(
+    HashMap<TimelineSyncId, TimelineState>,
+    Option<thread::JoinHandle<anyhow::Result<()>>>,
+)> {
     let local_timeline_files = local_tenant_timeline_files(config)
         .context("Failed to collect local tenant timeline files")?;
 
@@ -109,7 +113,7 @@ pub fn run_storage_sync_thread(
         Some(storage_config) => {
             let max_concurrent_sync = storage_config.max_concurrent_sync;
             let max_sync_errors = storage_config.max_sync_errors;
-            let handle = match &storage_config.storage {
+            let (initial_timeline_state, handle) = match &storage_config.storage {
                 RemoteStorageKind::LocalFs(root) => storage_sync::spawn_storage_sync_thread(
                     config,
                     local_timeline_files,
@@ -124,16 +128,26 @@ pub fn run_storage_sync_thread(
                     max_concurrent_sync,
                     max_sync_errors,
                 ),
-            };
-            handle.map(Some)
+            }
+            .context("Failed to spawn the storage sync thread")?;
+            Ok((initial_timeline_state, Some(handle)))
         }
-        None => Ok(None),
+        None => {
+            info!("No remote storage configured, skipping storage sync, considering all local timelines with correct metadata files enabled");
+            Ok((
+                local_timeline_files
+                    .into_keys()
+                    .map(|ids| (ids, TimelineState::Ready))
+                    .collect(),
+                None,
+            ))
+        }
     }
 }
 
 fn local_tenant_timeline_files(
     config: &'static PageServerConf,
-) -> anyhow::Result<HashMap<(ZTenantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)>> {
+) -> anyhow::Result<HashMap<TimelineSyncId, (TimelineMetadata, HashSet<PathBuf>)>> {
     let mut local_tenant_timeline_files = HashMap::new();
     let tenants_dir = config.tenants_path();
     for tenants_dir_entry in fs::read_dir(&tenants_dir)
@@ -168,8 +182,8 @@ fn local_tenant_timeline_files(
 fn collect_timelines_for_tenant(
     config: &'static PageServerConf,
     tenant_path: &Path,
-) -> anyhow::Result<HashMap<(ZTenantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)>> {
-    let mut timelines: HashMap<(ZTenantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)> =
+) -> anyhow::Result<HashMap<TimelineSyncId, (TimelineMetadata, HashSet<PathBuf>)>> {
+    let mut timelines: HashMap<TimelineSyncId, (TimelineMetadata, HashSet<PathBuf>)> =
         HashMap::new();
     let tenant_id = tenant_path
         .file_name()
@@ -190,7 +204,7 @@ fn collect_timelines_for_tenant(
                 let timeline_path = timelines_dir_entry.path();
                 match process_timeline_dir_contents(&timeline_path) {
                     Ok((timeline_id, metadata, timeline_files)) => {
-                        match timelines.entry((tenant_id, timeline_id)) {
+                        match timelines.entry(TimelineSyncId(tenant_id, timeline_id)) {
                             hash_map::Entry::Occupied(mut o) => {
                                 let (old_metadata, paths) = o.get_mut();
                                 ensure!(old_metadata == &metadata, "For timeline path '{}', found multiple metadata files, first: {:?}, second: {:?}", timeline_path.display(), old_metadata, metadata);

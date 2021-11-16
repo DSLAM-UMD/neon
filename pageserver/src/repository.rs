@@ -10,6 +10,14 @@ use std::time::Duration;
 use zenith_utils::lsn::{Lsn, RecordLsn};
 use zenith_utils::zid::ZTimelineId;
 
+// TODO kb does this belong here? + move below and add filelds?
+pub enum TimelineState {
+    Ready,
+    AwaitsSync,
+    CloudOnly,
+    Evicted,
+}
+
 ///
 /// A repository corresponds to one .zenith directory. One repository holds multiple
 /// timelines, forked off from the same initial call to 'initdb'.

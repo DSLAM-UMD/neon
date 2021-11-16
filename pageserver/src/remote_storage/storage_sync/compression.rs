@@ -26,7 +26,7 @@
 //! The files are stored with the metadata as the last file, to reduce the risk of corrupting the metadata file.
 
 use std::{
-    collections::BTreeSet,
+    collections::HashSet,
     future::Future,
     io::Cursor,
     path::{Path, PathBuf},
@@ -138,7 +138,7 @@ where
 /// consumer and the receiver ends are swapped, since the uncompression happens.
 pub async fn uncompress_file_stream_with_index<Prod, ProdRet, Fut>(
     destination_dir: PathBuf,
-    files_to_skip: Arc<BTreeSet<PathBuf>>,
+    files_to_skip: Arc<HashSet<PathBuf>>,
     disk_consistent_lsn: Lsn,
     header: ArchiveHeader,
     header_size: u64,
@@ -247,7 +247,7 @@ fn archive_name(disk_consistent_lsn: Lsn, header_size: u64) -> String {
 }
 
 async fn uncompress_with_header(
-    files_to_skip: &BTreeSet<PathBuf>,
+    files_to_skip: &HashSet<PathBuf>,
     destination_dir: &Path,
     header: ArchiveHeader,
     archive_after_header: impl io::AsyncRead + Send + Sync + Unpin,
@@ -298,7 +298,7 @@ async fn uncompress_entry(
     archive: &mut ZstdDecoder<io::BufReader<impl io::AsyncRead + Send + Sync + Unpin>>,
     entry_subpath: &str,
     entry_size: u64,
-    files_to_skip: &BTreeSet<PathBuf>,
+    files_to_skip: &HashSet<PathBuf>,
     destination_dir: &Path,
 ) -> anyhow::Result<()> {
     let destination_path = destination_dir.join(entry_subpath);
@@ -538,7 +538,7 @@ mod tests {
         let mut file = fs::File::open(&archive_target).await?;
         file.seek(io::SeekFrom::Start(header_size)).await?;
         let target_dir = tempdir.path().join("extracted");
-        uncompress_with_header(&BTreeSet::new(), &target_dir, header, file).await?;
+        uncompress_with_header(&HashSet::new(), &target_dir, header, file).await?;
 
         let extracted_files = list_file_paths_with_contents(&target_dir).await?;
 

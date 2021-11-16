@@ -74,6 +74,7 @@ impl RemoteTimeline {
             .collect()
     }
 
+    #[cfg(test)]
     pub fn stored_archives(&self) -> Vec<ArchiveId> {
         self.checkpoint_archives.keys().copied().collect()
     }
@@ -169,9 +170,10 @@ pub(super) async fn reconstruct_from_storage<
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     storage: &S,
+    archive_descriptions: HashMap<TimelineSyncId, BTreeMap<ArchiveId, (ArchiveDescription, P)>>,
 ) -> anyhow::Result<HashMap<TimelineSyncId, RemoteTimeline>> {
     let mut index = HashMap::<TimelineSyncId, RemoteTimeline>::new();
-    for (sync_id, remote_archives) in collect_archives(storage).await? {
+    for (sync_id, remote_archives) in archive_descriptions {
         let mut archive_header_downloads = remote_archives
             .into_iter()
             .map(|(archive_id, (archive, remote_path))| async move {
@@ -209,11 +211,13 @@ pub(super) async fn reconstruct_from_storage<
     Ok(index)
 }
 
-async fn collect_archives<
+pub(super) async fn collect_archive_descriptions<
     P: std::fmt::Debug + Send + Sync + 'static,
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     storage: &S,
+    // TODO kb this `P` looks rather weird, ideally, we should remove entire `RemoteStorage` out of this module.
+    // Then, we create an `Index` enum with two states of initialisation: archive descriptions and full, write some public API and hide all methods behind it.
 ) -> anyhow::Result<HashMap<TimelineSyncId, BTreeMap<ArchiveId, (ArchiveDescription, P)>>> {
     let mut remote_archives =
         HashMap::<TimelineSyncId, BTreeMap<ArchiveId, (ArchiveDescription, P)>>::new();
@@ -240,7 +244,7 @@ async fn collect_archives<
     Ok(remote_archives)
 }
 
-struct ArchiveDescription {
+pub struct ArchiveDescription {
     header_size: u64,
     disk_consistent_lsn: Lsn,
     archive_name: String,
