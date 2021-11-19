@@ -37,20 +37,20 @@ const UNKNOWN_SERVER_VERSION: u32 = 0;
 pub type Term = u64;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct TermSwitchEntry {
-    term: Term,
-    lsn: Lsn,
+pub struct TermSwitchEntry {
+    pub term: Term,
+    pub lsn: Lsn,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TermHistory(Vec<TermSwitchEntry>);
+pub struct TermHistory(pub Vec<TermSwitchEntry>);
 
 impl TermHistory {
-    fn empty() -> TermHistory {
+    pub fn empty() -> TermHistory {
         TermHistory(Vec::new())
     }
 
     // Parse TermHistory as n_entries followed by TermSwitchEntry pairs
-    fn from_bytes(mut bytes: Bytes) -> Result<TermHistory> {
+    pub fn from_bytes(mut bytes: Bytes) -> Result<TermHistory> {
         if bytes.remaining() < 4 {
             bail!("TermHistory misses len");
         }
@@ -70,7 +70,7 @@ impl TermHistory {
 
     /// Return copy of self with switches happening strictly after up_to
     /// truncated.
-    fn up_to(&self, up_to: Lsn) -> TermHistory {
+    pub fn up_to(&self, up_to: Lsn) -> TermHistory {
         let mut res = Vec::with_capacity(self.0.len());
         for e in &self.0 {
             if e.lsn > up_to {
@@ -223,9 +223,9 @@ pub struct VoteResponse {
  */
 #[derive(Debug)]
 pub struct ProposerElected {
-    term: Term,
-    start_streaming_at: Lsn,
-    term_history: TermHistory,
+    pub term: Term,
+    pub start_streaming_at: Lsn,
+    pub term_history: TermHistory,
 }
 
 /// Request with WAL message sent from proposer to safekeeper. Along the way it

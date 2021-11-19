@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::safekeeper::{AcceptorProposerMessage, AppendResponse};
 use crate::safekeeper::{
-    AppendRequest, AppendRequestHeader, ProposerAcceptorMessage, ProposerGreeting,
+    AppendRequest, AppendRequestHeader, ProposerAcceptorMessage, ProposerElected, ProposerGreeting,
 };
-use crate::safekeeper::{SafeKeeperState, Term};
+use crate::safekeeper::{SafeKeeperState, Term, TermHistory, TermSwitchEntry};
 use crate::send_wal::SendWalHandler;
 use crate::timeline::TimelineTools;
 use postgres_ffi::pg_constants;
@@ -34,6 +34,9 @@ struct AppendLogicalMessage {
 
     // if true, commit_lsn will match flush_lsn after append
     set_commit_lsn: bool,
+
+    // if true, ProposerElected will be sent before append
+    send_proposer_elected: bool,
 
     // fields from AppendRequestHeader
     term: Term,
@@ -69,6 +72,11 @@ pub fn handle_json_ctrl(
 
     // need to init safekeeper state before AppendRequest
     prepare_safekeeper(swh)?;
+
+    // if send_proposer_elected is true, we need to update local history
+    if append_request.send_proposer_elected {
+        send_proposer_elected(swh, append_request.term, append_request.epoch_start_lsn)?;
+    }
 
     let inserted_wal = append_logical_message(swh, append_request)?;
     let response = AppendResult {
@@ -107,6 +115,24 @@ fn prepare_safekeeper(swh: &mut SendWalHandler) -> Result<()> {
         Some(AcceptorProposerMessage::Greeting(_)) => Ok(()),
         _ => anyhow::bail!("not GreetingResponse"),
     }
+}
+
+fn send_proposer_elected(swh: &mut SendWalHandler, term: Term, lsn: Lsn) -> Result<()> {
+    // add new term to existing history
+    let history = swh.timeline.get().get_info().acceptor_state.term_history;
+    let history = history.up_to(lsn.checked_sub(1u64).unwrap());
+    let mut history_entries = history.0;
+    history_entries.push(TermSwitchEntry { term, lsn });
+    let history = TermHistory(history_entries);
+
+    let proposer_elected_request = ProposerAcceptorMessage::Elected(ProposerElected {
+        term,
+        start_streaming_at: lsn,
+        term_history: history,
+    });
+
+    swh.timeline.get().process_msg(&proposer_elected_request)?;
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
