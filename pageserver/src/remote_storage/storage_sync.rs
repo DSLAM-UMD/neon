@@ -29,7 +29,7 @@
 //!
 //! After pageserver parforms a succesful image checkpoint and produces new local files, it schedules an upload with
 //! the list of the files and its metadata file contents at the moment of checkpointing.
-//! Pageserver needsd both the file list and metadata to load the timeline, so both are mandatory for the upload, that's why the uploads happen after checkpointing.
+//! Pageserver needs both the file list and metadata to load the timeline, so both are mandatory for the upload, that's why the uploads happen after checkpointing.
 //! Not every upload of the same timeline gets processed: if `disk_consistent_lsn` is unchanged due to checkpointing for some reason, the remote data is not updated.
 //!
 //! Current uploads are per-checkpoint and don't accumulate any data with optimal size for storing on S3.
@@ -67,10 +67,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use lazy_static::lazy_static;
 use tokio::sync::RwLock;
 use tokio::{
-    sync::{
-        mpsc::{self, UnboundedReceiver},
-        Mutex,
-    },
+    sync::mpsc::{self, UnboundedReceiver},
     time::Instant,
 };
 use tracing::*;
@@ -481,7 +478,7 @@ fn schedule_first_tasks(
 ) {
     for (&sync_id, timeline) in remote_timelines {
         if !config.timeline_path(&sync_id.1, &sync_id.0).exists() {
-            SYNC_QUEUE.push(SyncTask::new(
+            sync_queue::push(SyncTask::new(
                 sync_id,
                 0,
                 SyncKind::Download(TimelineDownload {
@@ -530,9 +527,8 @@ async fn download_timeline<
 
     let archives_total = download.archives_to_download.len();
     debug!("Downloading {} archives of a timeline", archives_total);
-    let mut archives_left = archives_total;
     while let Some(archive_id) = download.archives_to_download.pop() {
-        match try_download_archive(
+        if let Err(e) = try_download_archive(
             Arc::clone(&remote_storage),
             config.timeline_path(&timeline_id, &tenant_id),
             remote_timeline,
@@ -541,21 +537,19 @@ async fn download_timeline<
         )
         .await
         {
-            Ok(()) => archives_left -= 1,
-            Err(e) => {
-                // add the failed archive back
-                download.archives_to_download.push(archive_id);
-                error!(
-                    "Failed to download archive {:?} for tenant {} timeline {} : {:#}, requeueing the download ({} archives left out of {})",
-                    archive_id, tenant_id, timeline_id, e, archives_left, archives_total
-                );
-                SYNC_QUEUE.push(SyncTask::new(
-                    sync_id,
-                    retries,
-                    SyncKind::Download(download),
-                ));
-                return Some(false);
-            }
+            // add the failed archive back
+            download.archives_to_download.push(archive_id);
+            let archives_left = download.archives_to_download.len();
+            error!(
+                "Failed to download archive {:?} for tenant {} timeline {} : {:#}, requeueing the download ({} archives left out of {})",
+                archive_id, tenant_id, timeline_id, e, archives_left, archives_total
+            );
+            sync_queue::push(SyncTask::new(
+                sync_id,
+                retries,
+                SyncKind::Download(download),
+            ));
+            return Some(false);
         }
     }
     debug!("Finished downloading all timeline's archives");
@@ -660,7 +654,7 @@ async fn upload_timeline_checkpoint<
                     "Failed to upload checkpoint: {:#}, requeueing the upload",
                     e
                 );
-                SYNC_QUEUE.push(SyncTask::new(
+                sync_queue::push(SyncTask::new(
                     sync_id,
                     retries,
                     SyncKind::Upload(new_checkpoint),

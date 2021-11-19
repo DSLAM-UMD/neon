@@ -120,6 +120,7 @@ pub fn perform_post_timeline_sync_steps(
     post_sync_steps: HashMap<(ZTenantId, ZTimelineId), PostTimelineSyncStep>,
 ) {
     if post_sync_steps.is_empty() {
+        debug!("no post-sync steps to perform");
         return;
     }
 
@@ -159,6 +160,13 @@ pub fn perform_post_timeline_sync_steps(
                 }
             }
             PostTimelineSyncStep::RegisterDownload => {
+                // TODO remove later, when branching is added to remote storage sync
+                for missing_path in [conf.branches_path(&tenant_id), conf.tags_path(&tenant_id)] {
+                    if !missing_path.exists() {
+                        fs::create_dir_all(&missing_path).unwrap();
+                    }
+                }
+
                 // init repo updates Tenant state
                 init_repo(conf, tenant_id);
                 let new_repo = get_repository_for_tenant(tenant_id).unwrap();

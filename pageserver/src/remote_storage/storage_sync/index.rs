@@ -25,19 +25,23 @@ use crate::{
     },
 };
 
+// TODO kb make `enum Index` right now? Then we can encapsulate all those private types
+
 use super::compression::{read_archive_header, ArchiveHeader};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct ArchiveId(Lsn);
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-struct FileId(ArchiveId, usize);
+struct FileId(ArchiveId, ArchiveEntryNumber);
+
+type ArchiveEntryNumber = usize;
 
 /// All archives and files in them, representing a certain timeline.
 /// Uses file and archive IDs to reference those without ownership issues.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct RemoteTimeline {
-    timeline_files: BTreeMap<FileId, (String, u64)>,
+    timeline_files: BTreeMap<FileId, FileEntry>,
     checkpoint_archives: BTreeMap<ArchiveId, CheckpointArchive>,
 }
 
@@ -68,7 +72,7 @@ impl RemoteTimeline {
     pub fn stored_files(&self, timeline_dir: &Path) -> BTreeSet<PathBuf> {
         self.timeline_files
             .values()
-            .map(|(relative_path, _)| timeline_dir.join(relative_path))
+            .map(|file_entry| timeline_dir.join(&file_entry.subpath))
             .collect()
     }
 
@@ -105,18 +109,14 @@ impl RemoteTimeline {
                 archive_id,
             );
 
-            let (subpath_in_timeline_dir, file_size) =
-                self.timeline_files.get(archive_file).ok_or_else(|| {
-                    anyhow!(
-                        "File with id {:?} not found for archive {:?}",
-                        archive_file,
-                        archive_id
-                    )
-                })?;
-            header_files.push(FileEntry {
-                subpath: subpath_in_timeline_dir.clone(),
-                size: *file_size,
-            });
+            let timeline_file = self.timeline_files.get(archive_file).ok_or_else(|| {
+                anyhow!(
+                    "File with id {:?} not found for archive {:?}",
+                    archive_file,
+                    archive_id
+                )
+            })?;
+            header_files.push(timeline_file.clone());
         }
 
         Ok((
@@ -139,8 +139,7 @@ impl RemoteTimeline {
         let mut common_archive_files = BTreeSet::new();
         for (file_index, file_entry) in header.files.into_iter().enumerate() {
             let file_id = FileId(archive_id, file_index);
-            self.timeline_files
-                .insert(file_id, (file_entry.subpath, file_entry.size));
+            self.timeline_files.insert(file_id, file_entry);
             common_archive_files.insert(file_id);
         }
 
