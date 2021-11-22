@@ -164,11 +164,12 @@ impl RemoteStorage for LocalFs {
                 start_inclusive,
                 end_exclusive
             );
-            if start_inclusive == end_exclusive - 1 {
+            if start_inclusive == end_exclusive.saturating_sub(1) {
                 return Ok(());
             }
         }
         let file_path = self.resolve_in_storage(from)?;
+
         if file_path.exists() && file_path.is_file() {
             let mut source = io::BufReader::new(
                 fs::OpenOptions::new()

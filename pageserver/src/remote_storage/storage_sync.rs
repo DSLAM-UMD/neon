@@ -79,7 +79,7 @@ use self::{
 use super::{RemoteStorage, TimelineSyncId};
 use crate::{
     layered_repository::metadata::TimelineMetadata,
-    tenant_mgr::{perform_post_timeline_sync_steps, PostTimelineSyncStep},
+    tenant_mgr::{perform_post_timeline_sync_steps, TimelineRegistration},
     PageServerConf,
 };
 
@@ -348,7 +348,7 @@ async fn loop_step<
     remote_timelines: Arc<RwLock<HashMap<TimelineSyncId, RemoteTimeline>>>,
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
-) -> HashMap<(ZTenantId, ZTimelineId), PostTimelineSyncStep> {
+) -> HashMap<(ZTenantId, ZTimelineId), TimelineRegistration> {
     let max_concurrent_sync = max_concurrent_sync.get();
     let mut next_tasks = Vec::with_capacity(max_concurrent_sync);
 
@@ -423,13 +423,13 @@ async fn process_task<
     task: SyncTask,
     max_sync_errors: NonZeroU32,
     remote_timelines: Arc<RwLock<HashMap<TimelineSyncId, RemoteTimeline>>>,
-) -> Option<PostTimelineSyncStep> {
+) -> Option<TimelineRegistration> {
     if task.retries > max_sync_errors.get() {
         error!(
             "Evicting task {:?} that failed {} times, exceeding the error theshold",
             task.kind, task.retries
         );
-        return Some(PostTimelineSyncStep::Evict);
+        return Some(TimelineRegistration::Evict);
     }
 
     if task.retries > 0 {
@@ -454,7 +454,7 @@ async fn process_task<
             )
             .await;
             register_sync_status(sync_start, "download", sync_status);
-            Some(PostTimelineSyncStep::RegisterDownload)
+            Some(TimelineRegistration::Download)
         }
         SyncKind::Upload(layer_upload) => {
             let sync_status = upload_timeline_checkpoint(
@@ -613,54 +613,56 @@ async fn upload_timeline_checkpoint<
         "Uploading checkpoint for tenant {}, timeline {}",
         tenant_id, timeline_id
     );
-    let timeline_dir = config.timeline_path(&timeline_id, &tenant_id);
-
     let remote_timeline = remote_timelines.get(&sync_id);
-    let remote_lsn = remote_timeline.and_then(RemoteTimeline::latest_disk_consistent_lsn);
-    let new_lsn = new_checkpoint.metadata.disk_consistent_lsn();
+
+    let new_upload_lsn = new_checkpoint.metadata.disk_consistent_lsn();
+    let already_contains_upload_lsn = remote_timeline
+        .map(|remote_timeline| remote_timeline.contains_archive(new_upload_lsn))
+        .unwrap_or(false);
+    if already_contains_upload_lsn {
+        warn!(
+            "Received a checkpoint witn Lsn {} that's already been uploaded to remote storage, skipping the upload.",
+            new_upload_lsn
+        );
+        return None;
+    }
+
+    let timeline_dir = config.timeline_path(&timeline_id, &tenant_id);
     let already_uploaded_files = remote_timeline
         .map(|timeline| timeline.stored_files(&timeline_dir))
         .unwrap_or_default();
-    if remote_lsn >= Some(new_lsn) {
-        warn!(
-            "Received a checkpoint witn Lsn {} that's not later than the one from remote storage {:?}, not uploading",
-            new_lsn, remote_lsn
-        );
-        None
-    } else {
-        match try_upload_checkpoint(
-            config,
-            remote_storage,
-            sync_id,
-            &new_checkpoint,
-            already_uploaded_files,
-        )
-        .await
-        {
-            Ok((archive_header, header_size)) => {
-                remote_timelines
-                    .entry(sync_id)
-                    .or_insert_with(RemoteTimeline::empty)
-                    .set_archive_contents(
-                        new_checkpoint.metadata.disk_consistent_lsn(),
-                        archive_header,
-                        header_size,
-                    );
-                debug!("Checkpoint uploaded successfully");
-                Some(true)
-            }
-            Err(e) => {
-                error!(
-                    "Failed to upload checkpoint: {:#}, requeueing the upload",
-                    e
+    match try_upload_checkpoint(
+        config,
+        remote_storage,
+        sync_id,
+        &new_checkpoint,
+        already_uploaded_files,
+    )
+    .await
+    {
+        Ok((archive_header, header_size)) => {
+            remote_timelines
+                .entry(sync_id)
+                .or_insert_with(RemoteTimeline::empty)
+                .set_archive_contents(
+                    new_checkpoint.metadata.disk_consistent_lsn(),
+                    archive_header,
+                    header_size,
                 );
-                sync_queue::push(SyncTask::new(
-                    sync_id,
-                    retries,
-                    SyncKind::Upload(new_checkpoint),
-                ));
-                Some(false)
-            }
+            debug!("Checkpoint uploaded successfully");
+            Some(true)
+        }
+        Err(e) => {
+            error!(
+                "Failed to upload checkpoint: {:#}, requeueing the upload",
+                e
+            );
+            sync_queue::push(SyncTask::new(
+                sync_id,
+                retries,
+                SyncKind::Upload(new_checkpoint),
+            ));
+            Some(false)
         }
     }
 }
@@ -739,7 +741,7 @@ mod tests {
         )?);
         let mut remote_timelines = HashMap::new();
 
-        let first_upload_metadata = dummy_metadata(Lsn(0x30));
+        let first_upload_metadata = dummy_metadata(Lsn(0x10));
         let first_checkpoint = create_local_timeline(
             &repo_harness,
             TIMELINE_ID,
@@ -755,7 +757,6 @@ mod tests {
             first_checkpoint,
         )
         .await;
-        let after_first_uploads = remote_timelines.clone();
 
         let uploaded_timeline = remote_timelines
             .get(&sync_id)
@@ -774,7 +775,7 @@ mod tests {
         );
         assert_eq!(
             uploaded_timeline
-                .archive_data(first_uploaded_archive)
+                .archive_data(uploaded_archives.first().copied().unwrap())
                 .unwrap()
                 .disk_consistent_lsn(),
             first_upload_metadata.disk_consistent_lsn(),
@@ -787,23 +788,6 @@ mod tests {
                 .collect(),
             "Should have all files from the first checkpoint"
         );
-
-        let new_upload_metadata = dummy_metadata(Lsn(0x20));
-        assert!(
-            new_upload_metadata.disk_consistent_lsn() < first_upload_metadata.disk_consistent_lsn()
-        );
-        let new_upload =
-            create_local_timeline(&repo_harness, TIMELINE_ID, &["b", "c"], new_upload_metadata)?;
-        upload_timeline_checkpoint(
-            repo_harness.conf,
-            &mut remote_timelines,
-            Arc::clone(&storage),
-            sync_id,
-            new_upload.clone(),
-            0,
-        )
-        .await;
-        assert_timelines_equal(after_first_uploads, remote_timelines.clone());
 
         let second_upload_metadata = dummy_metadata(Lsn(0x40));
         let second_checkpoint = create_local_timeline(
@@ -832,7 +816,7 @@ mod tests {
         assert_eq!(
             updated_archives.len(),
             2,
-            "Two archives are expected after a successful update of a first upload"
+            "Two archives are expected after a successful update of the upload"
         );
         updated_archives.retain(|archive_id| archive_id != &first_uploaded_archive);
         assert_eq!(
@@ -865,6 +849,144 @@ mod tests {
             .collect(),
             "Should have all files from both checkpoints without duplicates"
         );
+
+        let third_upload_metadata = dummy_metadata(Lsn(0x20));
+        let third_checkpoint = create_local_timeline(
+            &repo_harness,
+            TIMELINE_ID,
+            &["d"],
+            third_upload_metadata.clone(),
+        )?;
+        assert_ne!(
+            third_upload_metadata.disk_consistent_lsn(),
+            first_upload_metadata.disk_consistent_lsn()
+        );
+        assert!(
+            third_upload_metadata.disk_consistent_lsn()
+                < second_upload_metadata.disk_consistent_lsn()
+        );
+        ensure_correct_timeline_upload(
+            &repo_harness,
+            &mut remote_timelines,
+            Arc::clone(&storage),
+            TIMELINE_ID,
+            third_checkpoint,
+        )
+        .await;
+
+        let updated_timeline = remote_timelines
+            .get(&sync_id)
+            .expect("Should have the timeline after 3 checkpoints are uploaded");
+        let mut updated_archives = updated_timeline.stored_archives();
+        assert_eq!(
+            updated_archives.len(),
+            3,
+            "Three archives are expected after two successful updates of the upload"
+        );
+        updated_archives.retain(|archive_id| {
+            archive_id != &first_uploaded_archive && archive_id != &second_uploaded_archive
+        });
+        assert_eq!(
+            updated_archives.len(),
+            1,
+            "Only one new archive is expected among the uploaded"
+        );
+        let third_uploaded_archive = updated_archives.last().copied().unwrap();
+        assert!(
+            updated_timeline.latest_disk_consistent_lsn().unwrap()
+                > third_upload_metadata.disk_consistent_lsn(),
+            "Should not influence the last lsn by uploading an older checkpoint"
+        );
+        assert_eq!(
+            updated_timeline
+                .archive_data(third_uploaded_archive)
+                .unwrap()
+                .disk_consistent_lsn(),
+            third_upload_metadata.disk_consistent_lsn(),
+            "Uploaded archive should have corresponding Lsn"
+        );
+        assert_eq!(
+            updated_timeline.stored_files(&local_timeline_path),
+            vec![
+                local_timeline_path.join("a"),
+                local_timeline_path.join("b"),
+                local_timeline_path.join("c"),
+                local_timeline_path.join("d"),
+            ]
+            .into_iter()
+            .collect(),
+            "Should have all files from three checkpoints without duplicates"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reupload_timeline_rejected() -> anyhow::Result<()> {
+        let repo_harness = RepoHarness::create("reupload_timeline")?;
+        let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
+        let storage = Arc::new(LocalFs::new(
+            tempdir()?.path().to_owned(),
+            &repo_harness.conf.workdir,
+        )?);
+        let mut remote_timelines = HashMap::new();
+
+        let first_upload_metadata = dummy_metadata(Lsn(0x10));
+        let first_checkpoint = create_local_timeline(
+            &repo_harness,
+            TIMELINE_ID,
+            &["a", "b"],
+            first_upload_metadata.clone(),
+        )?;
+        ensure_correct_timeline_upload(
+            &repo_harness,
+            &mut remote_timelines,
+            Arc::clone(&storage),
+            TIMELINE_ID,
+            first_checkpoint,
+        )
+        .await;
+        let after_first_uploads = remote_timelines.clone();
+
+        let normal_upload_metadata = dummy_metadata(Lsn(0x20));
+        assert_ne!(
+            normal_upload_metadata.disk_consistent_lsn(),
+            first_upload_metadata.disk_consistent_lsn()
+        );
+
+        let checkpoint_with_no_files = create_local_timeline(
+            &repo_harness,
+            TIMELINE_ID,
+            &[],
+            normal_upload_metadata.clone(),
+        )?;
+        upload_timeline_checkpoint(
+            repo_harness.conf,
+            &mut remote_timelines,
+            Arc::clone(&storage),
+            sync_id,
+            checkpoint_with_no_files,
+            0,
+        )
+        .await;
+        assert_timelines_equal(after_first_uploads.clone(), remote_timelines.clone());
+
+        let checkpoint_with_uploaded_lsn = create_local_timeline(
+            &repo_harness,
+            TIMELINE_ID,
+            &["something", "new"],
+            first_upload_metadata.clone(),
+        )?;
+        upload_timeline_checkpoint(
+            repo_harness.conf,
+            &mut remote_timelines,
+            Arc::clone(&storage),
+            sync_id,
+            checkpoint_with_uploaded_lsn,
+            0,
+        )
+        .await;
+        assert_timelines_equal(after_first_uploads, remote_timelines);
 
         Ok(())
     }
@@ -943,13 +1065,23 @@ mod tests {
                 .unwrap(),
         );
 
-        let new_remote_files = remote_timelines.get(&sync_id).unwrap().clone();
-        assert_eq!(
-            new_remote_files.latest_disk_consistent_lsn(),
-            Some(new_upload.metadata.disk_consistent_lsn()),
-            "Remote timeline should have an updated metadata with later Lsn after successful reupload"
+        let new_remote_timeline = remote_timelines.get(&sync_id).unwrap().clone();
+        let new_remote_lsn = new_remote_timeline
+            .latest_disk_consistent_lsn()
+            .expect("Remote timeline should have an lsn after reupload");
+        let upload_lsn = new_upload.metadata.disk_consistent_lsn();
+        assert!(
+            new_remote_lsn >= upload_lsn,
+            "Remote timeline after upload should have the biggest Lsn out of all uploads"
         );
-        let remote_files_after_upload = new_remote_files
+        assert!(
+            new_remote_timeline
+                .stored_archives()
+                .contains(&ArchiveId(upload_lsn)),
+            "Should contain upload lsn among the remote ones"
+        );
+
+        let remote_files_after_upload = new_remote_timeline
             .stored_files(&harness.conf.timeline_path(&timeline_id, &harness.tenant_id));
         for new_uploaded_layer in &new_upload.layers {
             assert!(
@@ -959,7 +1091,7 @@ mod tests {
             );
         }
 
-        assert_timeline_files_match(harness, timeline_id, new_remote_files);
+        assert_timeline_files_match(harness, timeline_id, new_remote_timeline);
     }
 
     #[track_caller]
@@ -986,19 +1118,22 @@ mod tests {
             .map(|dir| dir.unwrap().path())
             .collect::<BTreeSet<_>>();
         let mut reported_remote_files = remote_timeline.stored_files(&local_timeline_dir);
-        if let Some(remote_lsn) = remote_timeline.latest_disk_consistent_lsn() {
-            let local_metadata_path =
-                metadata_path(harness.conf, remote_timeline_id, harness.tenant_id);
-            let local_metadata = TimelineMetadata::from_bytes(
-                &fs::read(&local_metadata_path).expect("Failed to read metadata file when comparing remote and local image files")
-            ).expect("Failed to parse metadata file contents when comparing remote and local image files");
-            assert_eq!(
-                local_metadata.disk_consistent_lsn(),
-                remote_lsn,
-                "Timeline remote metadata is different the local one"
-            );
-            reported_remote_files.insert(local_metadata_path);
-        }
+        let local_metadata_path =
+            metadata_path(harness.conf, remote_timeline_id, harness.tenant_id);
+        let local_metadata = TimelineMetadata::from_bytes(
+            &fs::read(&local_metadata_path)
+                .expect("Failed to read metadata file when comparing remote and local image files"),
+        )
+        .expect(
+            "Failed to parse metadata file contents when comparing remote and local image files",
+        );
+        assert!(
+            remote_timeline
+                .stored_archives()
+                .contains(&ArchiveId(local_metadata.disk_consistent_lsn())),
+            "Should contain local lsn among the remote ones after the upload"
+        );
+        reported_remote_files.insert(local_metadata_path);
 
         assert_eq!(
             local_paths, reported_remote_files,

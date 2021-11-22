@@ -25,12 +25,10 @@ use crate::{
     },
 };
 
-// TODO kb make `enum Index` right now? Then we can encapsulate all those private types
-
 use super::compression::{read_archive_header, ArchiveHeader};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct ArchiveId(Lsn);
+pub struct ArchiveId(pub(super) Lsn);
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 struct FileId(ArchiveId, ArchiveEntryNumber);
@@ -80,11 +78,17 @@ impl RemoteTimeline {
         self.checkpoint_archives.keys().copied().collect()
     }
 
+    #[cfg(test)]
     pub fn latest_disk_consistent_lsn(&self) -> Option<Lsn> {
         self.checkpoint_archives
             .keys()
             .last()
             .map(|archive_id| archive_id.0)
+    }
+
+    pub fn contains_archive(&self, disk_consistent_lsn: Lsn) -> bool {
+        self.checkpoint_archives
+            .contains_key(&ArchiveId(disk_consistent_lsn))
     }
 
     pub fn archive_data(&self, archive_id: ArchiveId) -> Option<&CheckpointArchive> {
