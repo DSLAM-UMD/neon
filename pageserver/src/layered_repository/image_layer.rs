@@ -462,7 +462,7 @@ impl ImageLayer {
             path_or_conf: PathOrConf::Conf(conf),
             timelineid,
             tenantid,
-            seg: filename.seg,
+            seg: filename.start_seg,
             lsn: filename.lsn,
             inner: Mutex::new(ImageLayerInner {
                 book: None,
@@ -496,7 +496,11 @@ impl ImageLayer {
 
     fn layer_name(&self) -> ImageFileName {
         ImageFileName {
-            seg: self.seg,
+            start_seg: self.seg,
+            end_seg: SegmentTag {
+                rel: self.seg.rel,
+                segno: self.seg.segno + 1,
+            },
             lsn: self.lsn,
         }
     }

@@ -123,7 +123,11 @@ impl Layer for InMemoryLayer {
         }
 
         let delta_filename = DeltaFileName {
-            seg: self.seg,
+            start_seg: self.seg,
+            end_seg: SegmentTag {
+                rel: self.seg.rel,
+                segno: self.seg.segno + 1,
+            },
             start_lsn: self.start_lsn,
             end_lsn,
             dropped: inner.dropped,

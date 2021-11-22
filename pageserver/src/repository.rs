@@ -893,12 +893,17 @@ mod tests {
         let tline_dir = harness.conf.timeline_path(&TIMELINE_ID, &harness.tenant_id);
 
         let expected_image_layer_path = tline_dir.join(format!(
-            "rel_{}_{}_{}_{}_{}_{:016X}_{:016X}",
+            "rel_{}_{}_{}_{}_{}_rel_{}_{}_{}_{}_{}_{:016X}_{:016X}",
             TESTREL_A_REL_TAG.spcnode,
             TESTREL_A_REL_TAG.dbnode,
             TESTREL_A_REL_TAG.relnode,
             TESTREL_A_REL_TAG.forknum,
             0, // seg is 0
+            TESTREL_A_REL_TAG.spcnode,
+            TESTREL_A_REL_TAG.dbnode,
+            TESTREL_A_REL_TAG.relnode,
+            TESTREL_A_REL_TAG.forknum,
+            1, // end seg is 1
             0x20,
             0x30,
         ));
@@ -952,8 +957,8 @@ mod tests {
             Ok(())
         };
 
-        let image_filename = format!("pg_control_0_{:016X}", 8000);
-        let delta_filename = format!("pg_control_0_{:016X}_{:016X}", 8000, 8008);
+        let image_filename = format!("pg_control_0_pg_control_1_{:016X}", 8000);
+        let delta_filename = format!("pg_control_0_pg_control_1_{:016X}_{:016X}", 8000, 8008);
 
         make_empty_file(&image_filename)?;
         make_empty_file(&delta_filename)?;

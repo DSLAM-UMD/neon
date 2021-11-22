@@ -549,7 +549,7 @@ impl DeltaLayer {
             path_or_conf: PathOrConf::Conf(conf),
             timelineid,
             tenantid,
-            seg: filename.seg,
+            seg: filename.start_seg,
             start_lsn: filename.start_lsn,
             end_lsn: filename.end_lsn,
             dropped: filename.dropped,
@@ -591,7 +591,11 @@ impl DeltaLayer {
 
     fn layer_name(&self) -> DeltaFileName {
         DeltaFileName {
-            seg: self.seg,
+            start_seg: self.seg,
+            end_seg: SegmentTag {
+                rel: self.seg.rel,
+                segno: self.seg.segno + 1,
+            },
             start_lsn: self.start_lsn,
             end_lsn: self.end_lsn,
             dropped: self.dropped,
