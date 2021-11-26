@@ -9,9 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, bail, ensure, Context};
-use futures::stream::{FuturesUnordered, StreamExt};
-use tracing::error;
+use anyhow::{anyhow, ensure, Context};
 use zenith_utils::{
     lsn::Lsn,
     zid::{ZTenantId, ZTimelineId},
@@ -21,11 +19,47 @@ use crate::{
     layered_repository::{TENANTS_SEGMENT_NAME, TIMELINES_SEGMENT_NAME},
     remote_storage::{
         storage_sync::compression::{parse_archive_name, FileEntry},
-        RemoteStorage, TimelineSyncId,
+        TimelineSyncId,
     },
 };
 
-use super::compression::{read_archive_header, ArchiveHeader};
+use super::compression::ArchiveHeader;
+
+#[derive(Debug)]
+pub struct RemoteTimelineIndex {
+    index: HashMap<TimelineSyncId, IndexEntry>,
+}
+
+impl RemoteTimelineIndex {
+    pub fn new(
+        descriptions: HashMap<TimelineSyncId, BTreeMap<ArchiveId, ArchiveDescription>>,
+    ) -> Self {
+        Self {
+            index: descriptions
+                .into_iter()
+                .map(|(sync_id, descriptions)| (sync_id, IndexEntry::Description(descriptions)))
+                .collect(),
+        }
+    }
+
+    pub fn entry(&self, id: &TimelineSyncId) -> Option<&IndexEntry> {
+        self.index.get(id)
+    }
+
+    pub fn entry_mut(&mut self, id: &TimelineSyncId) -> Option<&mut IndexEntry> {
+        self.index.get_mut(id)
+    }
+
+    pub fn set_entry(&mut self, id: TimelineSyncId, entry: IndexEntry) {
+        self.index.insert(id, entry);
+    }
+}
+
+#[derive(Debug)]
+pub enum IndexEntry {
+    Description(BTreeMap<ArchiveId, ArchiveDescription>),
+    Full(RemoteTimeline),
+}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct ArchiveId(pub(super) Lsn);
@@ -72,19 +106,6 @@ impl RemoteTimeline {
             .values()
             .map(|file_entry| timeline_dir.join(&file_entry.subpath))
             .collect()
-    }
-
-    #[cfg(test)]
-    pub fn stored_archives(&self) -> Vec<ArchiveId> {
-        self.checkpoint_archives.keys().copied().collect()
-    }
-
-    #[cfg(test)]
-    pub fn latest_disk_consistent_lsn(&self) -> Option<Lsn> {
-        self.checkpoint_archives
-            .keys()
-            .last()
-            .map(|archive_id| archive_id.0)
     }
 
     pub fn contains_archive(&self, disk_consistent_lsn: Lsn) -> bool {
@@ -134,7 +155,7 @@ impl RemoteTimeline {
     }
 
     /// Updates (creates, if necessary) the data about a certain archive contents.
-    pub fn set_archive_contents(
+    pub fn update_archive_contents(
         &mut self,
         disk_consistent_lsn: Lsn,
         header: ArchiveHeader,
@@ -162,99 +183,19 @@ impl RemoteTimeline {
     }
 }
 
-/// Reads remote storage file list, parses the data from the file paths and uses it to read every archive's header for every timeline,
-/// thus restoring the file list for every timeline.
-/// Due to the way headers are stored, S3 api for accessing file byte range is used, so we don't have to download an entire archive for its listing.
-pub(super) async fn reconstruct_from_storage<
-    P: std::fmt::Debug + Send + Sync + 'static,
-    S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
->(
-    storage: &S,
-    archive_descriptions: HashMap<TimelineSyncId, BTreeMap<ArchiveId, (ArchiveDescription, P)>>,
-) -> anyhow::Result<HashMap<TimelineSyncId, RemoteTimeline>> {
-    let mut index = HashMap::<TimelineSyncId, RemoteTimeline>::new();
-    for (sync_id, remote_archives) in archive_descriptions {
-        let mut archive_header_downloads = remote_archives
-            .into_iter()
-            .map(|(archive_id, (archive, remote_path))| async move {
-                let mut header_buf = std::io::Cursor::new(Vec::new());
-                storage
-                    .download_range(&remote_path, 0, Some(archive.header_size), &mut header_buf)
-                    .await
-                    .map_err(|e| (e, archive_id))?;
-                let header_buf = header_buf.into_inner();
-                let header = read_archive_header(&archive.archive_name, &mut header_buf.as_slice())
-                    .await
-                    .map_err(|e| (e, archive_id))?;
-                Ok::<_, (anyhow::Error, ArchiveId)>((archive_id, archive.header_size, header))
-            })
-            .collect::<FuturesUnordered<_>>();
-
-        while let Some(header_data) = archive_header_downloads.next().await {
-            match header_data {
-                Ok((archive_id, header_size, header)) => {
-                    index
-                        .entry(sync_id)
-                        .or_insert_with(RemoteTimeline::empty)
-                        .set_archive_contents(archive_id.0, header, header_size);
-                }
-                Err((e, archive_id)) => {
-                    bail!(
-                        "Failed to download archive header for tenant {}, timeline {}, archive for Lsn {}: {}",
-                        sync_id.0, sync_id.1, archive_id.0,
-                        e
-                    );
-                }
-            }
-        }
-    }
-    Ok(index)
-}
-
-pub(super) async fn collect_archive_descriptions<
-    P: std::fmt::Debug + Send + Sync + 'static,
-    S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
->(
-    storage: &S,
-    // TODO kb this `P` looks rather weird, ideally, we should remove entire `RemoteStorage` out of this module.
-    // Then, we create an `Index` enum with two states of initialisation: archive descriptions and full, write some public API and hide all methods behind it.
-) -> anyhow::Result<HashMap<TimelineSyncId, BTreeMap<ArchiveId, (ArchiveDescription, P)>>> {
-    let mut remote_archives =
-        HashMap::<TimelineSyncId, BTreeMap<ArchiveId, (ArchiveDescription, P)>>::new();
-    for (local_path, remote_path) in storage
-        .list()
-        .await
-        .context("Failed to list remote storage files")?
-        .into_iter()
-        .map(|remote_path| (storage.local_path(&remote_path), remote_path))
-    {
-        match local_path.and_then(|local_path| parse_archive_description(&local_path)) {
-            Ok((sync_id, archive_description)) => {
-                remote_archives.entry(sync_id).or_default().insert(
-                    ArchiveId(archive_description.disk_consistent_lsn),
-                    (archive_description, remote_path),
-                );
-            }
-            Err(e) => error!(
-                "Failed to parse archive description from path '{:?}', reason: {:#}",
-                remote_path, e
-            ),
-        }
-    }
-    Ok(remote_archives)
-}
-
+#[derive(Debug)]
 pub struct ArchiveDescription {
-    header_size: u64,
+    pub header_size: u64,
     disk_consistent_lsn: Lsn,
-    archive_name: String,
+    pub archive_name: String,
+    pub download_path: PathBuf,
 }
 
-fn parse_archive_description(
-    archive_path: &Path,
-) -> anyhow::Result<(TimelineSyncId, ArchiveDescription)> {
+pub(super) fn parse_archive_description(
+    archive_path: PathBuf,
+) -> anyhow::Result<(TimelineSyncId, ArchiveId, ArchiveDescription)> {
     let (disk_consistent_lsn, header_size) =
-        parse_archive_name(archive_path).with_context(|| {
+        parse_archive_name(&archive_path).with_context(|| {
             format!(
                 "Failed to parse timeline id from archive name '{}'",
                 archive_path.display()
@@ -331,7 +272,9 @@ fn parse_archive_description(
         .to_string();
     Ok((
         TimelineSyncId(tenant_id, timeline_id),
+        ArchiveId(disk_consistent_lsn),
         ArchiveDescription {
+            download_path: archive_path,
             header_size,
             disk_consistent_lsn,
             archive_name,
@@ -365,7 +308,7 @@ mod tests {
 
         let lsn = Lsn(1);
         let mut remote_timeline = RemoteTimeline::empty();
-        remote_timeline.set_archive_contents(lsn, header.clone(), 15);
+        remote_timeline.update_archive_contents(lsn, header.clone(), 15);
 
         let (restored_header, _) = remote_timeline
             .restore_header(ArchiveId(lsn))
