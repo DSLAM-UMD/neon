@@ -1,0 +1,438 @@
+use std::{borrow::Cow, collections::BTreeSet, path::PathBuf, sync::Arc};
+
+use anyhow::ensure;
+use tokio::sync::RwLock;
+use tracing::{debug, error, warn};
+
+use crate::{
+    remote_storage::{
+        storage_sync::{
+            compression, index::IndexEntry, sync_queue, update_index_description, SyncKind,
+            SyncTask,
+        },
+        RemoteStorage, TimelineSyncId,
+    },
+    PageServerConf,
+};
+
+use super::{compression::ArchiveHeader, index::RemoteTimelineIndex, NewCheckpoint};
+
+pub(super) async fn upload_timeline_checkpoint<
+    P: Send + Sync + 'static,
+    S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
+>(
+    config: &'static PageServerConf,
+    index: Arc<RwLock<RemoteTimelineIndex>>,
+    remote_storage: Arc<S>,
+    sync_id: TimelineSyncId,
+    new_checkpoint: NewCheckpoint,
+    retries: u32,
+) -> Option<bool> {
+    debug!("Uploading checkpoint for sync id {}", sync_id);
+    let new_upload_lsn = new_checkpoint.metadata.disk_consistent_lsn();
+
+    let index_read = index.read().await;
+    let remote_timeline = match index_read.entry(&sync_id) {
+        None => None,
+        Some(IndexEntry::Full(remote_timeline)) => Some(Cow::Borrowed(remote_timeline)),
+        Some(IndexEntry::Description(_)) => {
+            drop(index_read);
+            debug!("Found timeline description for the given ids, downloading the full index");
+            match update_index_description(remote_storage.as_ref(), index.as_ref(), sync_id).await {
+                Ok(remote_timeline) => Some(Cow::Owned(remote_timeline)),
+                Err(e) => {
+                    error!("Failed to download full timeline index: {:#}", e);
+                    sync_queue::push(SyncTask::new(
+                        sync_id,
+                        retries,
+                        SyncKind::Upload(new_checkpoint),
+                    ));
+                    return Some(false);
+                }
+            }
+        }
+    };
+
+    let already_contains_upload_lsn = remote_timeline
+        .as_ref()
+        .map(|remote_timeline| remote_timeline.contains_archive(new_upload_lsn))
+        .unwrap_or(false);
+    if already_contains_upload_lsn {
+        warn!(
+            "Received a checkpoint witn Lsn {} that's already been uploaded to remote storage, skipping the upload.",
+            new_upload_lsn
+        );
+        return None;
+    }
+
+    let TimelineSyncId(tenant_id, timeline_id) = sync_id;
+    let timeline_dir = config.timeline_path(&timeline_id, &tenant_id);
+    let already_uploaded_files = remote_timeline
+        .map(|timeline| timeline.stored_files(&timeline_dir))
+        .unwrap_or_default();
+    match try_upload_checkpoint(
+        config,
+        remote_storage,
+        sync_id,
+        &new_checkpoint,
+        already_uploaded_files,
+    )
+    .await
+    {
+        Ok((archive_header, header_size)) => match index.write().await.entry_mut(&sync_id) {
+            Some(IndexEntry::Full(remote_timeline)) => {
+                remote_timeline.update_archive_contents(
+                    new_checkpoint.metadata.disk_consistent_lsn(),
+                    archive_header,
+                    header_size,
+                );
+                debug!("Checkpoint uploaded successfully");
+                Some(true)
+            }
+            None | Some(IndexEntry::Description(_)) => panic!(
+                "Unexpected timeline index state: after upload, a full index should be available"
+            ),
+        },
+        Err(e) => {
+            error!(
+                "Failed to upload checkpoint: {:#}, requeueing the upload",
+                e
+            );
+            sync_queue::push(SyncTask::new(
+                sync_id,
+                retries,
+                SyncKind::Upload(new_checkpoint),
+            ));
+            Some(false)
+        }
+    }
+}
+
+async fn try_upload_checkpoint<
+    P: Send + Sync + 'static,
+    S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
+>(
+    config: &'static PageServerConf,
+    remote_storage: Arc<S>,
+    sync_id: TimelineSyncId,
+    new_checkpoint: &NewCheckpoint,
+    files_to_skip: BTreeSet<PathBuf>,
+) -> anyhow::Result<(ArchiveHeader, u64)> {
+    let TimelineSyncId(tenant_id, timeline_id) = sync_id;
+    let timeline_dir = config.timeline_path(&timeline_id, &tenant_id);
+
+    let files_to_upload = new_checkpoint
+        .layers
+        .iter()
+        .filter(|&path_to_upload| {
+            if files_to_skip.contains(path_to_upload) {
+                error!(
+                    "Skipping file upload '{}', since it was already uploaded",
+                    path_to_upload.display()
+                );
+                false
+            } else {
+                true
+            }
+        })
+        .collect::<Vec<_>>();
+    ensure!(!files_to_upload.is_empty(), "No files to upload");
+
+    compression::archive_files_as_stream(
+        &timeline_dir,
+        files_to_upload.into_iter(),
+        &new_checkpoint.metadata,
+        move |archive_streamer, archive_name| async move {
+            let timeline_dir = config.timeline_path(&timeline_id, &tenant_id);
+            remote_storage
+                .upload(
+                    archive_streamer,
+                    &remote_storage.storage_path(&timeline_dir.join(&archive_name))?,
+                )
+                .await
+        },
+    )
+    .await
+    .map(|(header, header_size, _)| (header, header_size))
+}
+
+// #[cfg(test)]
+// mod tests {
+//     use std::collections::HashMap;
+
+//     use tempfile::tempdir;
+//     use zenith_utils::lsn::Lsn;
+
+//     use crate::{
+//         remote_storage::{
+//             local_fs::LocalFs,
+//             storage_sync::test_utils::{
+//                 assert_timelines_equal, create_local_timeline, dummy_metadata,
+//                 ensure_correct_timeline_upload,
+//             },
+//         },
+//         repository::repo_harness::{RepoHarness, TIMELINE_ID},
+//     };
+
+//     use super::*;
+
+//     #[tokio::test]
+//     async fn reupload_timeline() -> anyhow::Result<()> {
+//         let repo_harness = RepoHarness::create("reupload_timeline")?;
+//         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
+//         let storage = Arc::new(LocalFs::new(
+//             tempdir()?.path().to_owned(),
+//             &repo_harness.conf.workdir,
+//         )?);
+//         let mut remote_timelines = HashMap::new();
+
+//         let first_upload_metadata = dummy_metadata(Lsn(0x10));
+//         let first_checkpoint = create_local_timeline(
+//             &repo_harness,
+//             TIMELINE_ID,
+//             &["a", "b"],
+//             first_upload_metadata.clone(),
+//         )?;
+//         let local_timeline_path = repo_harness.timeline_path(&TIMELINE_ID);
+//         ensure_correct_timeline_upload(
+//             &repo_harness,
+//             &mut remote_timelines,
+//             Arc::clone(&storage),
+//             TIMELINE_ID,
+//             first_checkpoint,
+//         )
+//         .await;
+
+//         let uploaded_timeline = remote_timelines
+//             .get(&sync_id)
+//             .expect("Should have the timeline after the corresponding checkpoint upload");
+//         let uploaded_archives = uploaded_timeline.stored_archives();
+//         assert_eq!(
+//             uploaded_archives.len(),
+//             1,
+//             "Only one archive is expected after a first upload"
+//         );
+//         let first_uploaded_archive = uploaded_archives.first().copied().unwrap();
+//         assert_eq!(
+//             uploaded_timeline.latest_disk_consistent_lsn(),
+//             Some(first_upload_metadata.disk_consistent_lsn()),
+//             "Metadata that was uploaded, should have its Lsn stored"
+//         );
+//         assert_eq!(
+//             uploaded_timeline
+//                 .archive_data(uploaded_archives.first().copied().unwrap())
+//                 .unwrap()
+//                 .disk_consistent_lsn(),
+//             first_upload_metadata.disk_consistent_lsn(),
+//             "Uploaded archive should have corresponding Lsn"
+//         );
+//         assert_eq!(
+//             uploaded_timeline.stored_files(&local_timeline_path),
+//             vec![local_timeline_path.join("a"), local_timeline_path.join("b")]
+//                 .into_iter()
+//                 .collect(),
+//             "Should have all files from the first checkpoint"
+//         );
+
+//         let second_upload_metadata = dummy_metadata(Lsn(0x40));
+//         let second_checkpoint = create_local_timeline(
+//             &repo_harness,
+//             TIMELINE_ID,
+//             &["b", "c"],
+//             second_upload_metadata.clone(),
+//         )?;
+//         assert!(
+//             first_upload_metadata.disk_consistent_lsn()
+//                 < second_upload_metadata.disk_consistent_lsn()
+//         );
+//         ensure_correct_timeline_upload(
+//             &repo_harness,
+//             &mut remote_timelines,
+//             Arc::clone(&storage),
+//             TIMELINE_ID,
+//             second_checkpoint,
+//         )
+//         .await;
+
+//         let updated_timeline = remote_timelines
+//             .get(&sync_id)
+//             .expect("Should have the timeline after 2 checkpoints are uploaded");
+//         let mut updated_archives = updated_timeline.stored_archives();
+//         assert_eq!(
+//             updated_archives.len(),
+//             2,
+//             "Two archives are expected after a successful update of the upload"
+//         );
+//         updated_archives.retain(|archive_id| archive_id != &first_uploaded_archive);
+//         assert_eq!(
+//             updated_archives.len(),
+//             1,
+//             "Only one new archive is expected among the uploaded"
+//         );
+//         let second_uploaded_archive = updated_archives.last().copied().unwrap();
+//         assert_eq!(
+//             updated_timeline.latest_disk_consistent_lsn(),
+//             Some(second_upload_metadata.disk_consistent_lsn()),
+//             "Metadata that was uploaded, should have its Lsn stored"
+//         );
+//         assert_eq!(
+//             updated_timeline
+//                 .archive_data(second_uploaded_archive)
+//                 .unwrap()
+//                 .disk_consistent_lsn(),
+//             second_upload_metadata.disk_consistent_lsn(),
+//             "Uploaded archive should have corresponding Lsn"
+//         );
+//         assert_eq!(
+//             updated_timeline.stored_files(&local_timeline_path),
+//             vec![
+//                 local_timeline_path.join("a"),
+//                 local_timeline_path.join("b"),
+//                 local_timeline_path.join("c"),
+//             ]
+//             .into_iter()
+//             .collect(),
+//             "Should have all files from both checkpoints without duplicates"
+//         );
+
+//         let third_upload_metadata = dummy_metadata(Lsn(0x20));
+//         let third_checkpoint = create_local_timeline(
+//             &repo_harness,
+//             TIMELINE_ID,
+//             &["d"],
+//             third_upload_metadata.clone(),
+//         )?;
+//         assert_ne!(
+//             third_upload_metadata.disk_consistent_lsn(),
+//             first_upload_metadata.disk_consistent_lsn()
+//         );
+//         assert!(
+//             third_upload_metadata.disk_consistent_lsn()
+//                 < second_upload_metadata.disk_consistent_lsn()
+//         );
+//         ensure_correct_timeline_upload(
+//             &repo_harness,
+//             &mut remote_timelines,
+//             Arc::clone(&storage),
+//             TIMELINE_ID,
+//             third_checkpoint,
+//         )
+//         .await;
+
+//         let updated_timeline = remote_timelines
+//             .get(&sync_id)
+//             .expect("Should have the timeline after 3 checkpoints are uploaded");
+//         let mut updated_archives = updated_timeline.stored_archives();
+//         assert_eq!(
+//             updated_archives.len(),
+//             3,
+//             "Three archives are expected after two successful updates of the upload"
+//         );
+//         updated_archives.retain(|archive_id| {
+//             archive_id != &first_uploaded_archive && archive_id != &second_uploaded_archive
+//         });
+//         assert_eq!(
+//             updated_archives.len(),
+//             1,
+//             "Only one new archive is expected among the uploaded"
+//         );
+//         let third_uploaded_archive = updated_archives.last().copied().unwrap();
+//         assert!(
+//             updated_timeline.latest_disk_consistent_lsn().unwrap()
+//                 > third_upload_metadata.disk_consistent_lsn(),
+//             "Should not influence the last lsn by uploading an older checkpoint"
+//         );
+//         assert_eq!(
+//             updated_timeline
+//                 .archive_data(third_uploaded_archive)
+//                 .unwrap()
+//                 .disk_consistent_lsn(),
+//             third_upload_metadata.disk_consistent_lsn(),
+//             "Uploaded archive should have corresponding Lsn"
+//         );
+//         assert_eq!(
+//             updated_timeline.stored_files(&local_timeline_path),
+//             vec![
+//                 local_timeline_path.join("a"),
+//                 local_timeline_path.join("b"),
+//                 local_timeline_path.join("c"),
+//                 local_timeline_path.join("d"),
+//             ]
+//             .into_iter()
+//             .collect(),
+//             "Should have all files from three checkpoints without duplicates"
+//         );
+
+//         Ok(())
+//     }
+
+//     #[tokio::test]
+//     async fn reupload_timeline_rejected() -> anyhow::Result<()> {
+//         let repo_harness = RepoHarness::create("reupload_timeline_rejected")?;
+//         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
+//         let storage = Arc::new(LocalFs::new(
+//             tempdir()?.path().to_owned(),
+//             &repo_harness.conf.workdir,
+//         )?);
+//         let mut remote_timelines = HashMap::new();
+
+//         let first_upload_metadata = dummy_metadata(Lsn(0x10));
+//         let first_checkpoint = create_local_timeline(
+//             &repo_harness,
+//             TIMELINE_ID,
+//             &["a", "b"],
+//             first_upload_metadata.clone(),
+//         )?;
+//         ensure_correct_timeline_upload(
+//             &repo_harness,
+//             &mut remote_timelines,
+//             Arc::clone(&storage),
+//             TIMELINE_ID,
+//             first_checkpoint,
+//         )
+//         .await;
+//         let after_first_uploads = remote_timelines.clone();
+
+//         let normal_upload_metadata = dummy_metadata(Lsn(0x20));
+//         assert_ne!(
+//             normal_upload_metadata.disk_consistent_lsn(),
+//             first_upload_metadata.disk_consistent_lsn()
+//         );
+
+//         let checkpoint_with_no_files = create_local_timeline(
+//             &repo_harness,
+//             TIMELINE_ID,
+//             &[],
+//             normal_upload_metadata.clone(),
+//         )?;
+//         upload_timeline_checkpoint(
+//             repo_harness.conf,
+//             &mut remote_timelines,
+//             Arc::clone(&storage),
+//             sync_id,
+//             checkpoint_with_no_files,
+//             0,
+//         )
+//         .await;
+//         assert_timelines_equal(after_first_uploads.clone(), remote_timelines.clone());
+
+//         let checkpoint_with_uploaded_lsn = create_local_timeline(
+//             &repo_harness,
+//             TIMELINE_ID,
+//             &["something", "new"],
+//             first_upload_metadata.clone(),
+//         )?;
+//         upload_timeline_checkpoint(
+//             repo_harness.conf,
+//             &mut remote_timelines,
+//             Arc::clone(&storage),
+//             sync_id,
+//             checkpoint_with_uploaded_lsn,
+//             0,
+//         )
+//         .await;
+//         assert_timelines_equal(after_first_uploads, remote_timelines);
+
+//         Ok(())
+//     }
+// }

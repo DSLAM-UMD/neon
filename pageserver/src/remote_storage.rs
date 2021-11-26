@@ -97,6 +97,12 @@ use crate::{
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct TimelineSyncId(ZTenantId, ZTimelineId);
 
+impl std::fmt::Display for TimelineSyncId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(tenant id: {}, timeline id: {})", self.0, self.1)
+    }
+}
+
 /// Based on the config, initiates the remote storage connection and starts a separate thread
 /// that ensures that pageserver and the remote storage are in sync with each other.
 /// If no external configuraion connection given, no thread or storage initialization is done.
