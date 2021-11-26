@@ -34,7 +34,7 @@ pub trait Repository: Send + Sync {
     fn branch_timeline(&self, src: ZTimelineId, dst: ZTimelineId, start_lsn: Lsn) -> Result<()>;
 
     /// perform one garbage collection iteration, removing old data files from disk.
-    /// this funtion is periodically called by gc thread.
+    /// this function is periodically called by gc thread.
     /// also it can be explicitly requested through page server api 'do_gc' command.
     ///
     /// 'timelineid' specifies the timeline to GC, or None for all.

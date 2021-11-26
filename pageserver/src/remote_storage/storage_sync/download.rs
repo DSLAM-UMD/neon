@@ -175,6 +175,18 @@ async fn download_missing_branches<
     let local_branches = tenant_branch_files(config, tenant_id)
         .await
         .context("Failed to list local branch files for the tenant")?;
+    let local_branches_dir = config.branches_path(&tenant_id);
+    if !local_branches_dir.exists() {
+        fs::create_dir_all(&local_branches_dir)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to create local branches directory at path '{}'",
+                    local_branches_dir.display()
+                )
+            })?;
+    }
+
     if let Some(remote_branches) = index.read().await.branch_files(tenant_id) {
         let mut remote_only_branches_downloads = remote_branches
             .difference(&local_branches)

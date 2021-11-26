@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use hyper::header;
 use hyper::StatusCode;
 use hyper::{Body, Request, Response, Uri};
@@ -219,16 +219,18 @@ async fn timeline_detail_handler(request: Request<Body>) -> Result<Response<Body
             info_span!("timeline_detail_handler", tenant = %tenant_id, timeline = %timeline_id)
                 .entered();
         let repo = tenant_mgr::get_repository_for_tenant(tenant_id)?;
-        let timeline = repo.get_timeline(timeline_id)?;
-        Ok::<_, anyhow::Error>(TimelineDetails {
-            timeline_id,
-            tenant_id,
-            ancestor_timeline_id: timeline.get_ancestor_timeline_id(),
-            disk_consistent_lsn: timeline.get_disk_consistent_lsn(),
-            last_record_lsn: timeline.get_last_record_lsn(),
-            prev_record_lsn: timeline.get_prev_record_lsn(),
-            start_lsn: timeline.get_start_lsn(),
-        })
+        match repo.get_timeline(timeline_id)? {
+            None => bail!("Timeline with id {} is not present locally", timeline_id),
+            Some(timeline) => Ok::<_, anyhow::Error>(TimelineDetails {
+                timeline_id,
+                tenant_id,
+                ancestor_timeline_id: timeline.get_ancestor_timeline_id(),
+                disk_consistent_lsn: timeline.get_disk_consistent_lsn(),
+                last_record_lsn: timeline.get_last_record_lsn(),
+                prev_record_lsn: timeline.get_prev_record_lsn(),
+                start_lsn: timeline.get_start_lsn(),
+            }),
+        }
     })
     .await
     .map_err(ApiError::from_err)??;

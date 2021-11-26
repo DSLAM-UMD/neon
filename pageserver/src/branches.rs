@@ -39,7 +39,6 @@ pub struct BranchInfo {
     pub current_logical_size_non_incremental: Option<usize>,
 }
 
-// TODO kb add an http method to init a certain timeline. Or somehow predownload the braches?
 impl BranchInfo {
     pub fn from_path<T: AsRef<Path>>(
         path: T,

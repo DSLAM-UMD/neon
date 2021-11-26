@@ -189,7 +189,7 @@ pub fn set_tenant_state(tenantid: ZTenantId, newstate: TenantState) -> Result<Te
             tenant.state = newstate;
             Ok(tenant.state)
         }
-        None => bail!("Tenant not found for tenant {}", tenantid),
+        None => bail!("Tenant not found for id {}", tenantid),
     }
 }
 

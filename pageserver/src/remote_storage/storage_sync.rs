@@ -486,7 +486,12 @@ async fn process_task<
             )
             .await;
             register_sync_status(sync_start, "download", sync_status);
-            Some(TimelineState::AwaitsDownload)
+
+            if sync_status? {
+                Some(TimelineState::Ready)
+            } else {
+                Some(TimelineState::AwaitsDownload)
+            }
         }
         SyncKind::Upload(layer_upload) => {
             let sync_status = upload_timeline_checkpoint(
@@ -575,7 +580,7 @@ fn compare_local_and_remote_timeline(
     local_files: Vec<PathBuf>,
     remote_entry: &TimelineIndexEntry,
 ) -> TimelineState {
-    let local_lsn = local_metadata.ancestor_lsn();
+    let local_lsn = local_metadata.disk_consistent_lsn();
     let uploads = remote_entry.uploaded_checkpoints();
 
     if !uploads.contains(&local_lsn) {
@@ -690,6 +695,10 @@ async fn tenant_branch_files(
     tenant_id: ZTenantId,
 ) -> anyhow::Result<HashSet<RelativePath>> {
     let branches_dir = conf.branches_path(&tenant_id);
+    if !branches_dir.exists() {
+        return Ok(HashSet::new());
+    }
+
     let mut branch_entries = fs::read_dir(&branches_dir)
         .await
         .context("Failed to list tenant branches dir contents")?;
