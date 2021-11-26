@@ -13,7 +13,7 @@ use zenith_utils::zid::ZTimelineId;
 // TODO kb does this belong here? + move below and add filelds?
 pub enum TimelineState {
     Ready,
-    AwaitsSync,
+    AwaitsDownload,
     CloudOnly,
     Evicted,
 }

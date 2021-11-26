@@ -280,7 +280,7 @@ pub(super) fn spawn_storage_sync_thread<
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     config: &'static PageServerConf,
-    local_timeline_files: HashMap<TimelineSyncId, (TimelineMetadata, HashSet<PathBuf>)>,
+    local_timeline_files: HashMap<TimelineSyncId, (TimelineMetadata, Vec<PathBuf>)>,
     remote_storage: S,
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
@@ -302,8 +302,7 @@ pub(super) fn spawn_storage_sync_thread<
             "Failed to list remote storage contents and collect the timeline archive description",
         )?);
 
-    let local_timeline_state =
-        schedule_first_sync_tasks(config, &remote_index, local_timeline_files);
+    let local_timeline_state = schedule_first_sync_tasks(&remote_index, local_timeline_files);
 
     let handle = thread::Builder::new()
         .name("Remote storage sync thread".to_string())
@@ -516,9 +515,8 @@ async fn process_task<
 }
 
 fn schedule_first_sync_tasks(
-    config: &'static PageServerConf,
     index: &RemoteTimelineIndex,
-    local_timeline_files: HashMap<TimelineSyncId, (TimelineMetadata, HashSet<PathBuf>)>,
+    local_timeline_files: HashMap<TimelineSyncId, (TimelineMetadata, Vec<PathBuf>)>,
 ) -> HashMap<TimelineSyncId, TimelineState> {
     let mut local_timeline_statuses = HashMap::new();
 
@@ -527,20 +525,22 @@ fn schedule_first_sync_tasks(
 
     for (sync_id, (local_metadata, local_files)) in local_timeline_files {
         match index.entry(&sync_id) {
-            Some(index_entry) => compare_local_and_remote_timeline(
-                config,
-                &mut local_timeline_statuses,
-                sync_id,
-                local_metadata,
-                local_files,
-                index_entry,
-            ),
+            Some(index_entry) => {
+                let timeline_status = compare_local_and_remote_timeline(
+                    &mut new_sync_tasks,
+                    sync_id,
+                    local_metadata,
+                    local_files,
+                    index_entry,
+                );
+                local_timeline_statuses.insert(sync_id, timeline_status);
+            }
             None => {
                 new_sync_tasks.push_back(SyncTask::new(
                     sync_id,
                     0,
                     SyncKind::Upload(NewCheckpoint {
-                        layers: local_files.into_iter().collect(),
+                        layers: local_files,
                         metadata: local_metadata,
                     }),
                 ));
@@ -549,10 +549,13 @@ fn schedule_first_sync_tasks(
         }
     }
 
-    // for (sync_id, missing_locally_archives) in remote_archive_description {
-    //     // TODO kb need such description to download a file index
-    //     local_timeline_statuses.insert(sync_id, TimelineState::CloudOnly);
-    // }
+    for cloud_only_id in index
+        .all_ids()
+        .filter(|remote_id| !local_timeline_statuses.contains_key(remote_id))
+        .collect::<Vec<_>>()
+    {
+        local_timeline_statuses.insert(cloud_only_id, TimelineState::CloudOnly);
+    }
 
     new_sync_tasks.into_iter().for_each(|task| {
         sync_queue::push(task);
@@ -560,75 +563,45 @@ fn schedule_first_sync_tasks(
     local_timeline_statuses
 }
 
-// TODO kb for every local timeline [file_1, file_2, ..., file_k, metadata], need to know its remote counterpart comparison
-// and register the timeline afterwards.
-//
-// ------------------------------- Data flow
-//
-// * first, the sync loop is started, returning the data about the remote timelines,
-// `HashMap<(ZTetantId, ZTimelineId), RemoteTimeline>` wrapped into some `RemoteIndex` struct for helper methods
-// (the loop is disabled by default, consider API options to resemble that in the return value)
-// * then, the local scan is done for all the tenants and their timelines, returning smth. like
-// `HashMap<(ZTetantId, ZTimelineId), (TimelineMetadata, HashSet<PathBuf>)>`
-// * `RemoteIndex`-like wrapper should be able to compare timelines and derive:
-//     * urgent downloads (disables a timeline before that happens)
-//     * first uploads
-//     * weird situations (needs timeline disabling)
-// * sync loop gets its first sync tasks (urgent downloads first, then uploads)
-// * tenant_mgr gets its tenant and timeline registration data (some timelines could be disabled or bailed out)
-//
-//
-// ------------------------------- Timeline comparison
-// !!! Timelines should have all fields equal, except the `disk_consistent_lsn` one.
-//
-// * local metadata's disk_consistent_lsn == last remote Lsn
-//     * some remote files are not downloaded: good since locals are just GC'ed? Ignore for now, add defragmentaion task later.
-//     * some local files are not uploaded: ok? could be a new timeline that was not persisted on disk entirely.
-//                                          Due to timeline init laziness, cannot rely on checkpoints ever happen before the server crashes, is it ok?
-//     * file sets match: all fine, wait for checkpoints
-//
-// * local metadata's disk_consistent_lsn > last remote Lsn
-//     * some remote files are not downloaded: good since locals are just GC'ed? Ignore for now, add defragmentaion task later.
-//     * some local files are not uploaded: ok, schedule their upload under the new Lsn
-//     * file sets match: weird, swear in the logs and do nothing for now,
-//                        consider deframentation for later: reuploading entire timeline under the new checkpoint and removing others
-//
-// * local metadata's disk_consistent_lsn < last remote Lsn
-//     * no archive with the local Lsn? Horrendous now (bail?), but ok when defragmentation is added.
-//     * some remote files are not downloaded:
-//         * from an archive with Lsn < local one: good since locals are just GC'ed? Ignore for now, add defragmentaion task later.
-//         * from an archive with Lsn >= local one: download the missing files
-//     * some local files are not uploaded: horrendous, reupload the last remote Lsn archive? which name to use?
-//     * file sets match: weird, swear in the logs and propagate the timeline to further Lsn to avoid conflicts?
-//
-// * no metadata file: bail on the timeline
-//
-// ------------------------------ Timeline registration
-// !!! We're not supposed to register a download for the timeline, already active: the download either happens on
-// * on a local timeline, detected to be outdated on startup (hence not activated)
-// * on a remote-only timeline, demanded via api
-//
-// For a local timeline, add its state to repository's LayerMap.
-// State could be:
-//
-// * `on cloud`: present remotely only, can be downloaded on demand
-// * `needs_download`: present locally and remotely, needs synchronisation before could be used safely
-// * `bailed`: remote and local state mismatch, disabled to not to cause any further harm
-// * `ok`: remote state matches the local one, at least partially (further uploads may be scheduled, but they don't prevent using the timeline)
-//
-// Tenant addition might be required, all operations should go through `tenant_mgr`.
-//-------------------------------
-//
 fn compare_local_and_remote_timeline(
-    config: &'static PageServerConf,
-    local_timeline_statuses: &mut HashMap<TimelineSyncId, TimelineState>,
+    new_sync_tasks: &mut VecDeque<SyncTask>,
     sync_id: TimelineSyncId,
     local_metadata: TimelineMetadata,
-    mut local_files: HashSet<PathBuf>,
+    local_files: Vec<PathBuf>,
     remote_entry: &IndexEntry,
-) {
-    let workdir = &config.workdir;
-    todo!("TODO kb")
+) -> TimelineState {
+    let local_lsn = local_metadata.ancestor_lsn();
+    let uploads = remote_entry.uploaded_checkpoints();
+
+    if !uploads.contains(&local_lsn) {
+        new_sync_tasks.push_back(SyncTask::new(
+            sync_id,
+            0,
+            SyncKind::Upload(NewCheckpoint {
+                layers: local_files.clone(),
+                metadata: local_metadata,
+            }),
+        ));
+    }
+
+    let archives_to_download: Vec<ArchiveId> = uploads
+        .into_iter()
+        .filter(|upload_lsn| upload_lsn > &local_lsn)
+        .map(ArchiveId)
+        .collect();
+    if !archives_to_download.is_empty() {
+        new_sync_tasks.push_back(SyncTask::new(
+            sync_id,
+            0,
+            SyncKind::Download(TimelineDownload {
+                files_to_skip: Arc::new(local_files.into_iter().collect()),
+                archives_to_download,
+            }),
+        ));
+        TimelineState::AwaitsDownload
+    } else {
+        TimelineState::Ready
+    }
 }
 
 fn register_sync_status(sync_start: Instant, sync_name: &str, sync_status: Option<bool>) {
