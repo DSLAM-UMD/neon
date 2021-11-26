@@ -73,7 +73,7 @@ mod rust_s3;
 mod storage_sync;
 
 use std::{
-    collections::{hash_map, HashMap, HashSet},
+    collections::{hash_map, HashMap},
     ffi, fs,
     path::{Path, PathBuf},
     thread,
@@ -153,7 +153,7 @@ pub fn start_local_timeline_sync(
 
 fn local_tenant_timeline_files(
     config: &'static PageServerConf,
-) -> anyhow::Result<HashMap<TimelineSyncId, (TimelineMetadata, HashSet<PathBuf>)>> {
+) -> anyhow::Result<HashMap<TimelineSyncId, (TimelineMetadata, Vec<PathBuf>)>> {
     let mut local_tenant_timeline_files = HashMap::new();
     let tenants_dir = config.tenants_path();
     for tenants_dir_entry in fs::read_dir(&tenants_dir)
@@ -188,9 +188,8 @@ fn local_tenant_timeline_files(
 fn collect_timelines_for_tenant(
     config: &'static PageServerConf,
     tenant_path: &Path,
-) -> anyhow::Result<HashMap<TimelineSyncId, (TimelineMetadata, HashSet<PathBuf>)>> {
-    let mut timelines: HashMap<TimelineSyncId, (TimelineMetadata, HashSet<PathBuf>)> =
-        HashMap::new();
+) -> anyhow::Result<HashMap<TimelineSyncId, (TimelineMetadata, Vec<PathBuf>)>> {
+    let mut timelines: HashMap<TimelineSyncId, (TimelineMetadata, Vec<PathBuf>)> = HashMap::new();
     let tenant_id = tenant_path
         .file_name()
         .and_then(ffi::OsStr::to_str)
@@ -240,8 +239,8 @@ fn collect_timelines_for_tenant(
 
 fn process_timeline_dir_contents(
     timeline_dir: &Path,
-) -> anyhow::Result<(ZTimelineId, TimelineMetadata, HashSet<PathBuf>)> {
-    let mut timeline_files = HashSet::new();
+) -> anyhow::Result<(ZTimelineId, TimelineMetadata, Vec<PathBuf>)> {
+    let mut timeline_files = Vec::new();
     let mut timeline_metadata_path = None;
 
     let timeline_id = timeline_dir
@@ -267,7 +266,7 @@ fn process_timeline_dir_contents(
                 if entry_path.file_name().and_then(ffi::OsStr::to_str) == Some(METADATA_FILE_NAME) {
                     timeline_metadata_path = Some(entry_path);
                 } else {
-                    timeline_files.insert(entry_path);
+                    timeline_files.push(entry_path);
                 }
             }
         }

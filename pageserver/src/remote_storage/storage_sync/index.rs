@@ -53,12 +53,31 @@ impl RemoteTimelineIndex {
     pub fn set_entry(&mut self, id: TimelineSyncId, entry: IndexEntry) {
         self.index.insert(id, entry);
     }
+
+    pub fn all_ids(&self) -> impl Iterator<Item = TimelineSyncId> + '_ {
+        self.index.keys().copied()
+    }
 }
 
 #[derive(Debug)]
 pub enum IndexEntry {
     Description(BTreeMap<ArchiveId, ArchiveDescription>),
     Full(RemoteTimeline),
+}
+
+impl IndexEntry {
+    pub fn uploaded_checkpoints(&self) -> BTreeSet<Lsn> {
+        match self {
+            IndexEntry::Description(description) => {
+                description.keys().map(|archive_id| archive_id.0).collect()
+            }
+            IndexEntry::Full(remote_timeline) => remote_timeline
+                .checkpoint_archives
+                .keys()
+                .map(|archive_id| archive_id.0)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
