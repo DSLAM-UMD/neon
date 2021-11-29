@@ -133,80 +133,84 @@ async fn try_download_archive<
     Ok(())
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use std::collections::HashMap;
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+    use tokio::fs;
+    use zenith_utils::lsn::Lsn;
 
-//     use tempfile::tempdir;
-//     use tokio::fs;
-//     use zenith_utils::lsn::Lsn;
+    use crate::{
+        remote_storage::{
+            local_fs::LocalFs,
+            storage_sync::{
+                collect_timeline_descriptions,
+                test_utils::{
+                    assert_index_descriptions, assert_timeline_files_match, create_local_timeline,
+                    dummy_metadata, ensure_correct_timeline_upload, expect_timeline,
+                },
+            },
+        },
+        repository::repo_harness::{RepoHarness, TIMELINE_ID},
+    };
 
-//     use crate::{
-//         remote_storage::{
-//             local_fs::LocalFs,
-//             storage_sync::{
-//                 collect_timeline_descriptions,
-//                 test_utils::{
-//                     assert_timeline_files_match, assert_timelines_equal, create_local_timeline,
-//                     dummy_metadata, ensure_correct_timeline_upload,
-//                 },
-//             },
-//         },
-//         repository::repo_harness::{RepoHarness, TIMELINE_ID},
-//     };
+    use super::*;
 
-//     use super::*;
+    #[tokio::test]
+    async fn test_download_timeline() -> anyhow::Result<()> {
+        let repo_harness = RepoHarness::create("test_download_timeline")?;
+        let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
+        let storage = Arc::new(LocalFs::new(
+            tempdir()?.path().to_owned(),
+            &repo_harness.conf.workdir,
+        )?);
+        let index = Arc::new(RwLock::new(RemoteTimelineIndex::new(
+            collect_timeline_descriptions(storage.as_ref())
+                .await
+                .unwrap(),
+        )));
 
-//     #[tokio::test]
-//     async fn test_download_timeline() -> anyhow::Result<()> {
-//         let repo_harness = RepoHarness::create("test_download_timeline")?;
-//         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
-//         let storage = Arc::new(LocalFs::new(
-//             tempdir()?.path().to_owned(),
-//             &repo_harness.conf.workdir,
-//         )?);
-//         let mut remote_timelines = HashMap::new();
+        let regular_timeline_path = repo_harness.timeline_path(&TIMELINE_ID);
+        let regular_timeline = create_local_timeline(
+            &repo_harness,
+            TIMELINE_ID,
+            &["a", "b"],
+            dummy_metadata(Lsn(0x30)),
+        )?;
+        ensure_correct_timeline_upload(
+            &repo_harness,
+            Arc::clone(&index),
+            Arc::clone(&storage),
+            TIMELINE_ID,
+            regular_timeline,
+        )
+        .await;
+        fs::remove_dir_all(&regular_timeline_path).await?;
+        let remote_regular_timeline = expect_timeline(index.as_ref(), sync_id).await;
 
-//         let regular_timeline_path = repo_harness.timeline_path(&TIMELINE_ID);
-//         let regular_timeline = create_local_timeline(
-//             &repo_harness,
-//             TIMELINE_ID,
-//             &["a", "b"],
-//             dummy_metadata(Lsn(0x30)),
-//         )?;
-//         ensure_correct_timeline_upload(
-//             &repo_harness,
-//             &mut remote_timelines,
-//             Arc::clone(&storage),
-//             TIMELINE_ID,
-//             regular_timeline,
-//         )
-//         .await;
-//         fs::remove_dir_all(&regular_timeline_path).await?;
-//         let remote_regular_timeline = remote_timelines.get(&sync_id).unwrap().clone();
+        download_timeline(
+            repo_harness.conf,
+            Arc::clone(&index),
+            Arc::clone(&storage),
+            sync_id,
+            TimelineDownload {
+                files_to_skip: Arc::new(HashSet::new()),
+                archives_to_download: remote_regular_timeline
+                    .checkpoints()
+                    .map(ArchiveId)
+                    .collect(),
+            },
+            0,
+        )
+        .await;
+        assert_index_descriptions(
+            index.as_ref(),
+            collect_timeline_descriptions(storage.as_ref())
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_timeline_files_match(&repo_harness, TIMELINE_ID, remote_regular_timeline);
 
-//         download_timeline(
-//             repo_harness.conf,
-//             &remote_timelines,
-//             Arc::clone(&storage),
-//             sync_id,
-//             TimelineDownload {
-//                 files_to_skip: Arc::new(HashSet::new()),
-//                 archives_to_download: remote_regular_timeline.stored_archives(),
-//             },
-//             0,
-//         )
-//         .await;
-//         assert_timelines_equal(
-//             remote_timelines,
-//             reconstruct_from_storage(
-//                 storage.as_ref(),
-//                 collect_timeline_descriptions(storage.as_ref()).await?,
-//             )
-//             .await?,
-//         );
-//         assert_timeline_files_match(&repo_harness, TIMELINE_ID, remote_regular_timeline);
-
-//         Ok(())
-//     }
-// }
+        Ok(())
+    }
+}

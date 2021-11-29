@@ -230,7 +230,7 @@ enum SyncKind {
 /// Local timeline files for upload, appeared after the new checkpoint.
 /// Current checkpoint design assumes new files are added only, no deletions or amendment happens.
 #[derive(Debug, PartialEq, Eq, Clone)]
-struct NewCheckpoint {
+pub struct NewCheckpoint {
     /// Relish file paths in the pageserver workdir, that were added for the corresponding checkpoint.
     layers: Vec<PathBuf>,
     metadata: TimelineMetadata,
@@ -678,180 +678,195 @@ async fn download_archive_header<
     Ok(header)
 }
 
-// TODO kb uncomment
-// #[cfg(test)]
-// mod test_utils {
-//     use std::{
-//         collections::{BTreeMap, BTreeSet},
-//         fs,
-//     };
+#[cfg(test)]
+mod test_utils {
+    use std::{collections::BTreeSet, fs};
 
-//     use super::{index::reconstruct_from_storage, *};
-//     use crate::{
-//         layered_repository::metadata::metadata_path,
-//         remote_storage::local_fs::LocalFs,
-//         repository::repo_harness::{RepoHarness, TIMELINE_ID},
-//     };
-//     use tempfile::tempdir;
-//     use zenith_utils::lsn::Lsn;
+    use super::*;
+    use crate::{
+        layered_repository::metadata::metadata_path, remote_storage::local_fs::LocalFs,
+        repository::repo_harness::RepoHarness,
+    };
+    use zenith_utils::lsn::Lsn;
 
-//     #[track_caller]
-//     pub async fn ensure_correct_timeline_upload(
-//         harness: &RepoHarness,
-//         remote_timelines: &mut HashMap<TimelineSyncId, RemoteTimeline>,
-//         remote_storage: Arc<LocalFs>,
-//         timeline_id: ZTimelineId,
-//         new_upload: NewCheckpoint,
-//     ) {
-//         let sync_id = TimelineSyncId(harness.tenant_id, timeline_id);
-//         upload_timeline_checkpoint(
-//             harness.conf,
-//             remote_timelines,
-//             Arc::clone(&remote_storage),
-//             sync_id,
-//             new_upload.clone(),
-//             0,
-//         )
-//         .await;
-//         assert_timelines_equal(
-//             remote_timelines.clone(),
-//             reconstruct_from_storage(
-//                 remote_storage.as_ref(),
-//                 collect_timeline_descriptions(remote_storage.as_ref())
-//                     .await
-//                     .unwrap(),
-//             )
-//             .await
-//             .unwrap(),
-//         );
+    #[track_caller]
+    pub async fn ensure_correct_timeline_upload(
+        harness: &RepoHarness,
+        index: Arc<RwLock<RemoteTimelineIndex>>,
+        remote_storage: Arc<LocalFs>,
+        timeline_id: ZTimelineId,
+        new_upload: NewCheckpoint,
+    ) {
+        let sync_id = TimelineSyncId(harness.tenant_id, timeline_id);
+        upload_timeline_checkpoint(
+            harness.conf,
+            Arc::clone(&index),
+            Arc::clone(&remote_storage),
+            sync_id,
+            new_upload.clone(),
+            0,
+        )
+        .await;
+        assert_index_descriptions(
+            &index,
+            collect_timeline_descriptions(remote_storage.as_ref())
+                .await
+                .unwrap(),
+        )
+        .await;
 
-//         let new_remote_timeline = remote_timelines.get(&sync_id).unwrap().clone();
-//         let new_remote_lsn = new_remote_timeline
-//             .latest_disk_consistent_lsn()
-//             .expect("Remote timeline should have an lsn after reupload");
-//         let upload_lsn = new_upload.metadata.disk_consistent_lsn();
-//         assert!(
-//             new_remote_lsn >= upload_lsn,
-//             "Remote timeline after upload should have the biggest Lsn out of all uploads"
-//         );
-//         assert!(
-//             new_remote_timeline
-//                 .stored_archives()
-//                 .contains(&ArchiveId(upload_lsn)),
-//             "Should contain upload lsn among the remote ones"
-//         );
+        let new_remote_timeline = expect_timeline(index.as_ref(), sync_id).await;
+        let new_remote_lsn = new_remote_timeline
+            .checkpoints()
+            .max()
+            .expect("Remote timeline should have an lsn after reupload");
+        let upload_lsn = new_upload.metadata.disk_consistent_lsn();
+        assert!(
+            new_remote_lsn >= upload_lsn,
+            "Remote timeline after upload should have the biggest Lsn out of all uploads"
+        );
+        assert!(
+            new_remote_timeline.contains_archive(upload_lsn),
+            "Should contain upload lsn among the remote ones"
+        );
 
-//         let remote_files_after_upload = new_remote_timeline
-//             .stored_files(&harness.conf.timeline_path(&timeline_id, &harness.tenant_id));
-//         for new_uploaded_layer in &new_upload.layers {
-//             assert!(
-//                 remote_files_after_upload.contains(new_uploaded_layer),
-//                 "Remote files do not contain layer that should be uploaded: '{}'",
-//                 new_uploaded_layer.display()
-//             );
-//         }
+        let remote_files_after_upload = new_remote_timeline
+            .stored_files(&harness.conf.timeline_path(&timeline_id, &harness.tenant_id));
+        for new_uploaded_layer in &new_upload.layers {
+            assert!(
+                remote_files_after_upload.contains(new_uploaded_layer),
+                "Remote files do not contain layer that should be uploaded: '{}'",
+                new_uploaded_layer.display()
+            );
+        }
 
-//         assert_timeline_files_match(harness, timeline_id, new_remote_timeline);
-//     }
+        assert_timeline_files_match(harness, timeline_id, new_remote_timeline);
+    }
 
-//     #[track_caller]
-//     pub fn assert_timelines_equal(
-//         expected: HashMap<TimelineSyncId, RemoteTimeline>,
-//         actual: HashMap<TimelineSyncId, RemoteTimeline>,
-//     ) {
-//         let expected_sorted = expected.iter().collect::<BTreeMap<_, _>>();
-//         let actual_sorted = actual.iter().collect::<BTreeMap<_, _>>();
-//         assert_eq!(
-//             expected_sorted, actual_sorted,
-//             "Different timeline contents"
-//         );
-//     }
+    pub async fn expect_timeline(
+        index: &RwLock<RemoteTimelineIndex>,
+        sync_id: TimelineSyncId,
+    ) -> RemoteTimeline {
+        if let Some(IndexEntry::Full(remote_timeline)) = index.read().await.entry(&sync_id) {
+            remote_timeline.clone()
+        } else {
+            panic!(
+                "Expect to have a full remote timeline in the index for sync id {}",
+                sync_id
+            )
+        }
+    }
 
-//     pub fn assert_timeline_files_match(
-//         harness: &RepoHarness,
-//         remote_timeline_id: ZTimelineId,
-//         remote_timeline: RemoteTimeline,
-//     ) {
-//         let local_timeline_dir = harness.timeline_path(&remote_timeline_id);
-//         let local_paths = fs::read_dir(&local_timeline_dir)
-//             .unwrap()
-//             .map(|dir| dir.unwrap().path())
-//             .collect::<BTreeSet<_>>();
-//         let mut reported_remote_files = remote_timeline.stored_files(&local_timeline_dir);
-//         let local_metadata_path =
-//             metadata_path(harness.conf, remote_timeline_id, harness.tenant_id);
-//         let local_metadata = TimelineMetadata::from_bytes(
-//             &fs::read(&local_metadata_path)
-//                 .expect("Failed to read metadata file when comparing remote and local image files"),
-//         )
-//         .expect(
-//             "Failed to parse metadata file contents when comparing remote and local image files",
-//         );
-//         assert!(
-//             remote_timeline
-//                 .stored_archives()
-//                 .contains(&ArchiveId(local_metadata.disk_consistent_lsn())),
-//             "Should contain local lsn among the remote ones after the upload"
-//         );
-//         reported_remote_files.insert(local_metadata_path);
+    #[track_caller]
+    pub async fn assert_index_descriptions(
+        index: &RwLock<RemoteTimelineIndex>,
+        expected_descriptions: HashMap<TimelineSyncId, BTreeMap<ArchiveId, ArchiveDescription>>,
+    ) {
+        let actual_entries_count = index.read().await.all_ids().count();
+        assert_eq!(actual_entries_count, expected_descriptions.len());
 
-//         assert_eq!(
-//             local_paths, reported_remote_files,
-//             "Remote image files and local image files are different, missing locally: {:?}, missing remotely: {:?}",
-//             reported_remote_files.difference(&local_paths).collect::<Vec<_>>(),
-//             local_paths.difference(&reported_remote_files).collect::<Vec<_>>(),
-//         );
+        for (expected_sync_id, timeline_descriptions) in expected_descriptions {
+            let index_read = index.read().await;
+            let actual_timeline = index_read.entry(&expected_sync_id).expect(&format!(
+                "Failed to find an expected timeline with id {} in the index",
+                expected_sync_id
+            ));
+            let expected_lsns = timeline_descriptions
+                .values()
+                .map(|description| description.disk_consistent_lsn)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                actual_timeline.uploaded_checkpoints(),
+                expected_lsns,
+                "Timline {} should have the same checkpoints uploaded",
+                expected_sync_id,
+            )
+        }
+    }
 
-//         if let Some(remote_file) = reported_remote_files.iter().next() {
-//             let actual_remote_paths = fs::read_dir(
-//                 remote_file
-//                     .parent()
-//                     .expect("Remote files are expected to have their timeline dir as parent"),
-//             )
-//             .unwrap()
-//             .map(|dir| dir.unwrap().path())
-//             .collect::<BTreeSet<_>>();
+    pub fn assert_timeline_files_match(
+        harness: &RepoHarness,
+        remote_timeline_id: ZTimelineId,
+        remote_timeline: RemoteTimeline,
+    ) {
+        let local_timeline_dir = harness.timeline_path(&remote_timeline_id);
+        let local_paths = fs::read_dir(&local_timeline_dir)
+            .unwrap()
+            .map(|dir| dir.unwrap().path())
+            .collect::<BTreeSet<_>>();
+        let mut reported_remote_files = remote_timeline.stored_files(&local_timeline_dir);
+        let local_metadata_path =
+            metadata_path(harness.conf, remote_timeline_id, harness.tenant_id);
+        let local_metadata = TimelineMetadata::from_bytes(
+            &fs::read(&local_metadata_path)
+                .expect("Failed to read metadata file when comparing remote and local image files"),
+        )
+        .expect(
+            "Failed to parse metadata file contents when comparing remote and local image files",
+        );
+        assert!(
+            remote_timeline.contains_archive(local_metadata.disk_consistent_lsn()),
+            "Should contain local lsn among the remote ones after the upload"
+        );
+        reported_remote_files.insert(local_metadata_path);
 
-//             let unreported_remote_files = actual_remote_paths
-//                 .difference(&reported_remote_files)
-//                 .collect::<Vec<_>>();
-//             assert!(
-//                 unreported_remote_files.is_empty(),
-//                 "Unexpected extra remote files that were not listed: {:?}",
-//                 unreported_remote_files
-//             )
-//         }
-//     }
+        assert_eq!(
+            local_paths, reported_remote_files,
+            "Remote image files and local image files are different, missing locally: {:?}, missing remotely: {:?}",
+            reported_remote_files.difference(&local_paths).collect::<Vec<_>>(),
+            local_paths.difference(&reported_remote_files).collect::<Vec<_>>(),
+        );
 
-//     pub fn create_local_timeline(
-//         harness: &RepoHarness,
-//         timeline_id: ZTimelineId,
-//         filenames: &[&str],
-//         metadata: TimelineMetadata,
-//     ) -> anyhow::Result<NewCheckpoint> {
-//         let timeline_path = harness.timeline_path(&timeline_id);
-//         fs::create_dir_all(&timeline_path)?;
+        if let Some(remote_file) = reported_remote_files.iter().next() {
+            let actual_remote_paths = fs::read_dir(
+                remote_file
+                    .parent()
+                    .expect("Remote files are expected to have their timeline dir as parent"),
+            )
+            .unwrap()
+            .map(|dir| dir.unwrap().path())
+            .collect::<BTreeSet<_>>();
 
-//         let mut layers = Vec::with_capacity(filenames.len());
-//         for &file in filenames {
-//             let file_path = timeline_path.join(file);
-//             fs::write(&file_path, dummy_contents(file).into_bytes())?;
-//             layers.push(file_path);
-//         }
+            let unreported_remote_files = actual_remote_paths
+                .difference(&reported_remote_files)
+                .collect::<Vec<_>>();
+            assert!(
+                unreported_remote_files.is_empty(),
+                "Unexpected extra remote files that were not listed: {:?}",
+                unreported_remote_files
+            )
+        }
+    }
 
-//         fs::write(
-//             metadata_path(harness.conf, timeline_id, harness.tenant_id),
-//             metadata.to_bytes()?,
-//         )?;
+    pub fn create_local_timeline(
+        harness: &RepoHarness,
+        timeline_id: ZTimelineId,
+        filenames: &[&str],
+        metadata: TimelineMetadata,
+    ) -> anyhow::Result<NewCheckpoint> {
+        let timeline_path = harness.timeline_path(&timeline_id);
+        fs::create_dir_all(&timeline_path)?;
 
-//         Ok(NewCheckpoint { layers, metadata })
-//     }
+        let mut layers = Vec::with_capacity(filenames.len());
+        for &file in filenames {
+            let file_path = timeline_path.join(file);
+            fs::write(&file_path, dummy_contents(file).into_bytes())?;
+            layers.push(file_path);
+        }
 
-//     fn dummy_contents(name: &str) -> String {
-//         format!("contents for {}", name)
-//     }
+        fs::write(
+            metadata_path(harness.conf, timeline_id, harness.tenant_id),
+            metadata.to_bytes()?,
+        )?;
 
-//     pub fn dummy_metadata(disk_consistent_lsn: Lsn) -> TimelineMetadata {
-//         TimelineMetadata::new(disk_consistent_lsn, None, None, Lsn(0), Lsn(0), Lsn(0))
-//     }
-// }
+        Ok(NewCheckpoint { layers, metadata })
+    }
+
+    fn dummy_contents(name: &str) -> String {
+        format!("contents for {}", name)
+    }
+
+    pub fn dummy_metadata(disk_consistent_lsn: Lsn) -> TimelineMetadata {
+        TimelineMetadata::new(disk_consistent_lsn, None, None, Lsn(0), Lsn(0), Lsn(0))
+    }
+}

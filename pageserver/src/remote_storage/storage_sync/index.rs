@@ -119,6 +119,13 @@ impl RemoteTimeline {
         }
     }
 
+    #[cfg(test)]
+    pub fn checkpoints(&self) -> impl Iterator<Item = Lsn> + '_ {
+        self.checkpoint_archives
+            .values()
+            .map(CheckpointArchive::disk_consistent_lsn)
+    }
+
     /// Lists all relish files in the given remote timeline. Omits the metadata file.
     pub fn stored_files(&self, timeline_dir: &Path) -> BTreeSet<PathBuf> {
         self.timeline_files
@@ -202,10 +209,10 @@ impl RemoteTimeline {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArchiveDescription {
     pub header_size: u64,
-    disk_consistent_lsn: Lsn,
+    pub disk_consistent_lsn: Lsn,
     pub archive_name: String,
     pub download_path: PathBuf,
 }
