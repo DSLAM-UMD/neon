@@ -109,7 +109,7 @@ impl std::fmt::Display for TimelineSyncId {
 pub fn start_local_timeline_sync(
     config: &'static PageServerConf,
 ) -> anyhow::Result<(
-    HashMap<TimelineSyncId, TimelineState>,
+    HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>>,
     Option<thread::JoinHandle<anyhow::Result<()>>>,
 )> {
     let local_timeline_files = local_tenant_timeline_files(config)
@@ -119,7 +119,7 @@ pub fn start_local_timeline_sync(
         Some(storage_config) => {
             let max_concurrent_sync = storage_config.max_concurrent_sync;
             let max_sync_errors = storage_config.max_sync_errors;
-            let (initial_timeline_state, handle) = match &storage_config.storage {
+            let (initial_timeline_states, handle) = match &storage_config.storage {
                 RemoteStorageKind::LocalFs(root) => storage_sync::spawn_storage_sync_thread(
                     config,
                     local_timeline_files,
@@ -136,17 +136,21 @@ pub fn start_local_timeline_sync(
                 ),
             }
             .context("Failed to spawn the storage sync thread")?;
-            Ok((initial_timeline_state, Some(handle)))
+            Ok((initial_timeline_states, Some(handle)))
         }
         None => {
             info!("No remote storage configured, skipping storage sync, considering all local timelines with correct metadata files enabled");
-            Ok((
-                local_timeline_files
-                    .into_keys()
-                    .map(|ids| (ids, TimelineState::Ready))
-                    .collect(),
-                None,
-            ))
+            let mut local_timeline_statuses: HashMap<
+                ZTenantId,
+                HashMap<ZTimelineId, TimelineState>,
+            > = HashMap::new();
+            for TimelineSyncId(tenant_id, timeline_id) in local_timeline_files.into_keys() {
+                local_timeline_statuses
+                    .entry(tenant_id)
+                    .or_default()
+                    .insert(timeline_id, TimelineState::Ready);
+            }
+            Ok((local_timeline_statuses, None))
         }
     }
 }

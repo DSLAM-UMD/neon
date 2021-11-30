@@ -35,7 +35,7 @@ use self::metadata::{metadata_path, TimelineMetadata};
 use crate::page_cache;
 use crate::relish::*;
 use crate::remote_storage::schedule_timeline_checkpoint_upload;
-use crate::repository::{GcResult, Repository, Timeline, TimelineWriter, WALRecord};
+use crate::repository::{GcResult, Repository, Timeline, TimelineState, TimelineWriter, WALRecord};
 use crate::tenant_mgr;
 use crate::walreceiver;
 use crate::walreceiver::IS_WAL_RECEIVER;
@@ -270,18 +270,27 @@ impl Repository for LayeredRepository {
         Ok(())
     }
 
-    fn unload_timeline(&self, timeline_id: ZTimelineId) -> Result<()> {
-        let mut timelines = self.timelines.lock().unwrap();
-        let removed_timeline = match timelines.remove(&timeline_id) {
-            Some(timeline) => timeline,
-            None => {
-                warn!("Timeline {} not found, nothing to remove", timeline_id);
-                return Ok(());
+    fn set_timeline_state(&self, timeline_id: ZTimelineId, new_state: TimelineState) -> Result<()> {
+        match new_state {
+            TimelineState::Ready => {
+                // self.get_timeline_locked(timelineid, &mut timelines)?
+                todo!()
             }
-        };
-        drop(timelines);
-        shutdown_timeline(timeline_id, removed_timeline.as_ref())?;
-
+            TimelineState::AwaitsDownload => todo!(),
+            TimelineState::CloudOnly => todo!(),
+            TimelineState::Evicted => {
+                let mut timelines = self.timelines.lock().unwrap();
+                let removed_timeline = match timelines.remove(&timeline_id) {
+                    Some(timeline) => timeline,
+                    None => {
+                        warn!("Timeline {} not found, nothing to remove", timeline_id);
+                        return Ok(());
+                    }
+                };
+                drop(timelines);
+                shutdown_timeline(timeline_id, removed_timeline.as_ref())?;
+            }
+        }
         Ok(())
     }
 }

@@ -3,7 +3,6 @@
 
 use crate::branches;
 use crate::layered_repository::LayeredRepository;
-use crate::remote_storage::TimelineSyncId;
 use crate::repository::{Repository, Timeline, TimelineState};
 use crate::tenant_threads;
 use crate::walredo::PostgresRedoManager;
@@ -12,12 +11,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use lazy_static::lazy_static;
 use log::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fmt;
-use std::fs;
-use std::str::FromStr;
+use std::collections::{hash_map, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::{fmt, fs};
 use zenith_utils::zid::{ZTenantId, ZTimelineId};
 
 lazy_static! {
@@ -31,11 +28,6 @@ struct Tenant {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub enum TenantState {
-    // This tenant only exists in cloud storage. It cannot be accessed.
-    CloudOnly,
-    // This tenant exists in cloud storage, and we are currently downloading it to local disk.
-    // It cannot be accessed yet, not until it's been fully downloaded to local disk.
-    Downloading,
     // All data for this tenant is complete on local disk, but we haven't loaded the Repository,
     // Timeline and Layer structs into memory yet, so it cannot be accessed yet.
     //Ready,
@@ -50,22 +42,9 @@ pub enum TenantState {
     Stopping,
 }
 
-/// A remote storage timeline synchronization event, that needs another registration step
-/// inside the manager to be fully completed.
-#[derive(Debug)]
-pub enum TimelineRegistration {
-    /// The timeline cannot be synchronized anymore due to some sync issues.
-    /// Needs to be removed from pageserver, to avoid further data diverging.
-    Evict,
-    /// A new timeline got downloaded and needs to be loaded into pageserver.
-    Download,
-}
-
 impl fmt::Display for TenantState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TenantState::CloudOnly => f.write_str("CloudOnly"),
-            TenantState::Downloading => f.write_str("Downloading"),
             TenantState::Active => f.write_str("Active"),
             TenantState::Idle => f.write_str("Idle"),
             TenantState::Stopping => f.write_str("Stopping"),
@@ -79,112 +58,78 @@ fn access_tenants() -> MutexGuard<'static, HashMap<ZTenantId, Tenant>> {
 
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-pub fn init(
+pub fn set_timeline_states(
     conf: &'static PageServerConf,
-    initial_timeline_state: HashMap<TimelineSyncId, TimelineState>,
+    timeline_states: HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>>,
 ) {
-    for dir_entry in fs::read_dir(conf.tenants_path()).unwrap() {
-        let tenantid =
-            ZTenantId::from_str(dir_entry.unwrap().file_name().to_str().unwrap()).unwrap();
-
-        {
-            let mut m = access_tenants();
-            let tenant = Tenant {
-                state: TenantState::CloudOnly,
-                repo: None,
-            };
-            m.insert(tenantid, tenant);
-        }
-
-        init_repo(conf, tenantid);
-        info!("initialized storage for tenant: {}", &tenantid);
-    }
-}
-
-fn init_repo(conf: &'static PageServerConf, tenant_id: ZTenantId) {
-    // Set up a WAL redo manager, for applying WAL records.
-    let walredo_mgr = PostgresRedoManager::new(conf, tenant_id);
-
-    // Set up an object repository, for actual data storage.
-    let repo = Arc::new(LayeredRepository::new(
-        conf,
-        Arc::new(walredo_mgr),
-        tenant_id,
-        true,
-    ));
-
-    let mut m = access_tenants();
-    let tenant = m.get_mut(&tenant_id).unwrap();
-    tenant.repo = Some(repo);
-    tenant.state = TenantState::Idle;
-}
-
-pub fn perform_post_timeline_sync_steps(
-    conf: &'static PageServerConf,
-    post_sync_steps: HashMap<(ZTenantId, ZTimelineId), TimelineRegistration>,
-) {
-    if post_sync_steps.is_empty() {
-        debug!("no post-sync steps to perform");
+    if timeline_states.is_empty() {
+        debug!("no timeline state updates to perform");
         return;
     }
 
-    info!("Performing {} post-sync steps", post_sync_steps.len());
-    trace!("Steps: {:?}", post_sync_steps);
+    info!("Updating states for {} timelines", timeline_states.len());
+    trace!("States: {:?}", timeline_states);
 
-    {
-        let mut m = access_tenants();
-        for &(tenant_id, timeline_id) in post_sync_steps.keys() {
-            let tenant = m.entry(tenant_id).or_insert_with(|| Tenant {
-                state: TenantState::Downloading,
-                repo: None,
-            });
-            tenant.state = TenantState::Downloading;
-            match &tenant.repo {
-                Some(repo) => {
-                    init_timeline(repo.as_ref(), timeline_id);
-                    tenant.state = TenantState::Idle;
-                    return;
-                }
-                None => log::warn!("Initialize new repo"),
-            }
-            tenant.state = TenantState::Idle;
-        }
-    }
-
-    for ((tenant_id, timeline_id), post_sync_step) in post_sync_steps {
-        match post_sync_step {
-            TimelineRegistration::Evict => {
-                if let Err(e) = get_repository_for_tenant(tenant_id)
-                    .and_then(|repo| repo.unload_timeline(timeline_id))
-                {
-                    error!(
-                        "Failed to remove repository for tenant {}, timeline {}: {:#}",
-                        tenant_id, timeline_id, e
-                    )
-                }
-            }
-            TimelineRegistration::Download => {
-                // TODO remove later, when branching is added to remote storage sync
-                for missing_path in [conf.branches_path(&tenant_id), conf.tags_path(&tenant_id)] {
-                    if !missing_path.exists() {
-                        fs::create_dir_all(&missing_path).unwrap();
-                    }
-                }
-
-                // init repo updates Tenant state
-                init_repo(conf, tenant_id);
-                let new_repo = get_repository_for_tenant(tenant_id).unwrap();
-                init_timeline(new_repo.as_ref(), timeline_id);
-            }
+    let mut m = access_tenants();
+    for (tenant_id, timeline_states) in timeline_states {
+        let tenant = m.entry(tenant_id).or_insert_with(|| Tenant {
+            state: TenantState::Idle,
+            repo: None,
+        });
+        if let Err(e) = put_timelines_into_tenant(conf, tenant, tenant_id, timeline_states) {
+            error!(
+                "Failed to update timeline states for tenant {}: {:#}",
+                tenant_id, e
+            );
         }
     }
 }
 
-fn init_timeline(repo: &dyn Repository, timeline_id: ZTimelineId) {
-    match repo.get_timeline(timeline_id) {
-        Ok(_timeline) => log::info!("Successfully initialized timeline {}", timeline_id),
-        Err(e) => log::error!("Failed to init timeline {}, reason: {:#}", timeline_id, e),
+fn put_timelines_into_tenant(
+    conf: &'static PageServerConf,
+    tenant: &mut Tenant,
+    tenant_id: ZTenantId,
+    timeline_states: HashMap<ZTimelineId, TimelineState>,
+) -> anyhow::Result<()> {
+    let repo = match tenant.repo.as_ref() {
+        Some(repo) => Arc::clone(repo),
+        None => {
+            // Set up a WAL redo manager, for applying WAL records.
+            let walredo_mgr = PostgresRedoManager::new(conf, tenant_id);
+
+            // Set up an object repository, for actual data storage.
+            let repo: Arc<dyn Repository> = Arc::new(LayeredRepository::new(
+                conf,
+                Arc::new(walredo_mgr),
+                tenant_id,
+                true,
+            ));
+            tenant.repo = Some(Arc::clone(&repo));
+            repo
+        }
+    };
+
+    for (timeline_id, timeline_state) in timeline_states {
+        repo.set_timeline_state(timeline_id, timeline_state)
+            .with_context(|| {
+                format!(
+                    "Failed to update timeline {} state to {:?}",
+                    timeline_id, timeline_state
+                )
+            })?;
+
+        if matches!(timeline_state, TimelineState::Ready) {
+            for missing_path in [conf.branches_path(&tenant_id), conf.tags_path(&tenant_id)] {
+                if !missing_path.exists() {
+                    fs::create_dir_all(&missing_path)
+                        .context("Failed to create missing timeline dirs locally")?;
+                }
+            }
+            info!("Successfully initialized timeline {}", timeline_id);
+        }
     }
+
+    Ok(())
 }
 
 // Check this flag in the thread loops to know when to exit
@@ -216,36 +161,27 @@ pub fn create_repository_for_tenant(
     conf: &'static PageServerConf,
     tenantid: ZTenantId,
 ) -> Result<()> {
-    {
-        let mut m = access_tenants();
-        // First check that the tenant doesn't exist already
-        if m.get(&tenantid).is_some() {
-            bail!("tenant {} already exists", tenantid);
-        }
-        let tenant = Tenant {
-            state: TenantState::CloudOnly,
-            repo: None,
-        };
-        m.insert(tenantid, tenant);
-    }
-
     let wal_redo_manager = Arc::new(PostgresRedoManager::new(conf, tenantid));
-    let repo = branches::create_repo(conf, tenantid, wal_redo_manager)?;
+    let repo = Some(branches::create_repo(conf, tenantid, wal_redo_manager)?);
 
-    let mut m = access_tenants();
-    let tenant = m.get_mut(&tenantid).unwrap();
-    tenant.repo = Some(repo);
-    tenant.state = TenantState::Idle;
+    match access_tenants().entry(tenantid) {
+        hash_map::Entry::Occupied(_) => bail!("tenant {} already exists", tenantid),
+        hash_map::Entry::Vacant(v) => {
+            v.insert(Tenant {
+                state: TenantState::Idle,
+                repo,
+            });
+        }
+    }
 
     Ok(())
 }
 
-// If tenant is not found in the repository, return CloudOnly state
+// If tenant is not found in the repository, return Stopping state
 pub fn get_tenant_state(tenantid: ZTenantId) -> TenantState {
-    let m = access_tenants();
-    match m.get(&tenantid) {
+    match access_tenants().get(&tenantid) {
         Some(tenant) => tenant.state,
-        None => TenantState::CloudOnly,
+        None => TenantState::Stopping,
     }
 }
 
@@ -289,8 +225,8 @@ pub fn get_timeline_for_tenant(
 }
 
 fn list_tenantids() -> Result<Vec<ZTenantId>> {
-    let m = access_tenants();
-    m.iter()
+    access_tenants()
+        .iter()
         .map(|v| {
             let (tenantid, _) = v;
             Ok(*tenantid)
@@ -306,8 +242,8 @@ pub struct TenantInfo {
 }
 
 pub fn list_tenants() -> Result<Vec<TenantInfo>> {
-    let m = access_tenants();
-    m.iter()
+    access_tenants()
+        .iter()
         .map(|v| {
             let (id, tenant) = v;
             Ok(TenantInfo {
