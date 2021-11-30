@@ -119,7 +119,6 @@ impl RemoteTimeline {
         }
     }
 
-    #[cfg(test)]
     pub fn checkpoints(&self) -> impl Iterator<Item = Lsn> + '_ {
         self.checkpoint_archives
             .values()

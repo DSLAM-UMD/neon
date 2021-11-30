@@ -57,7 +57,7 @@ pub mod index;
 mod upload;
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     num::{NonZeroU32, NonZeroUsize},
     path::PathBuf,
     sync::Arc,
@@ -240,7 +240,7 @@ pub struct NewCheckpoint {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TimelineDownload {
     files_to_skip: Arc<HashSet<PathBuf>>,
-    archives_to_download: Vec<ArchiveId>,
+    archives_to_skip: BTreeSet<ArchiveId>,
 }
 
 /// Adds the new checkpoint files as an upload sync task to the queue.
@@ -279,8 +279,7 @@ pub fn schedule_timeline_download(tenant_id: ZTenantId, timeline_id: ZTimelineId
         0,
         SyncKind::Download(TimelineDownload {
             files_to_skip: Arc::new(HashSet::new()),
-            // TODO kb this is wrong, so have to be archives to skip?
-            archives_to_download: Vec::new(),
+            archives_to_skip: BTreeSet::new(),
         }),
     ));
 }
@@ -616,18 +615,19 @@ fn compare_local_and_remote_timeline(
         ));
     }
 
-    let archives_to_download: Vec<ArchiveId> = uploads
+    let uploads_count = uploads.len();
+    let archives_to_skip: BTreeSet<ArchiveId> = uploads
         .into_iter()
-        .filter(|upload_lsn| upload_lsn > &local_lsn)
+        .filter(|upload_lsn| upload_lsn <= &local_lsn)
         .map(ArchiveId)
         .collect();
-    if !archives_to_download.is_empty() {
+    if archives_to_skip.len() != uploads_count {
         new_sync_tasks.push_back(SyncTask::new(
             sync_id,
             0,
             SyncKind::Download(TimelineDownload {
                 files_to_skip: Arc::new(local_files.into_iter().collect()),
-                archives_to_download,
+                archives_to_skip,
             }),
         ));
         TimelineState::AwaitsDownload
