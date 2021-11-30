@@ -58,12 +58,18 @@ pub(super) async fn download_timeline<
         }
     };
 
-    let archives_total = download.archives_to_download.len();
+    let mut archives_to_download = remote_timeline
+        .checkpoints()
+        .map(ArchiveId)
+        .filter(|remote_archive| !download.archives_to_skip.contains(remote_archive))
+        .collect::<Vec<_>>();
+
+    let archives_total = archives_to_download.len();
     debug!("Downloading {} archives of a timeline", archives_total);
 
     let TimelineSyncId(tenant_id, timeline_id) = sync_id;
-    while let Some(archive_id) = download.archives_to_download.pop() {
-        if let Err(e) = try_download_archive(
+    while let Some(archive_id) = archives_to_download.pop() {
+        match try_download_archive(
             Arc::clone(&remote_storage),
             config.timeline_path(&timeline_id, &tenant_id),
             remote_timeline.as_ref(),
@@ -72,19 +78,23 @@ pub(super) async fn download_timeline<
         )
         .await
         {
-            // add the failed archive back
-            download.archives_to_download.push(archive_id);
-            let archives_left = download.archives_to_download.len();
-            error!(
-                "Failed to download archive {:?} for tenant {} timeline {} : {:#}, requeueing the download ({} archives left out of {})",
-                archive_id, tenant_id, timeline_id, e, archives_left, archives_total
-            );
-            sync_queue::push(SyncTask::new(
-                sync_id,
-                retries,
-                SyncKind::Download(download),
-            ));
-            return Some(false);
+            Err(e) => {
+                let archives_left = archives_to_download.len();
+                error!(
+                    "Failed to download archive {:?} for tenant {} timeline {} : {:#}, requeueing the download ({} archives left out of {})",
+                    archive_id, tenant_id, timeline_id, e, archives_left, archives_total
+                );
+                sync_queue::push(SyncTask::new(
+                    sync_id,
+                    retries,
+                    SyncKind::Download(download),
+                ));
+                return Some(false);
+            }
+            Ok(()) => {
+                debug!("Successfully downloaded archive {:?}", archive_id);
+                download.archives_to_skip.insert(archive_id);
+            }
         }
     }
 
@@ -135,6 +145,8 @@ async fn try_download_archive<
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use tempfile::tempdir;
     use tokio::fs;
     use zenith_utils::lsn::Lsn;
@@ -194,10 +206,7 @@ mod tests {
             sync_id,
             TimelineDownload {
                 files_to_skip: Arc::new(HashSet::new()),
-                archives_to_download: remote_regular_timeline
-                    .checkpoints()
-                    .map(ArchiveId)
-                    .collect(),
+                archives_to_skip: BTreeSet::new(),
             },
             0,
         )
