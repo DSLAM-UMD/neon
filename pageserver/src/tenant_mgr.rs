@@ -3,7 +3,7 @@
 
 use crate::branches;
 use crate::layered_repository::LayeredRepository;
-use crate::repository::{Repository, Timeline, TimelineState};
+use crate::repository::{Repository, TimelineEntry, TimelineState};
 use crate::tenant_threads;
 use crate::walredo::PostgresRedoManager;
 use crate::PageServerConf;
@@ -218,7 +218,7 @@ pub fn get_repository_for_tenant(tenantid: ZTenantId) -> Result<Arc<dyn Reposito
 pub fn get_timeline_for_tenant(
     tenantid: ZTenantId,
     timelineid: ZTimelineId,
-) -> Result<Arc<dyn Timeline>> {
+) -> Result<TimelineEntry> {
     get_repository_for_tenant(tenantid)?
         .get_timeline(timelineid)
         .with_context(|| format!("cannot fetch timeline {}", timelineid))

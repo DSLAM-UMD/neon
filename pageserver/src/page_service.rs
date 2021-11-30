@@ -36,7 +36,7 @@ use zenith_utils::zid::{ZTenantId, ZTimelineId};
 use crate::basebackup;
 use crate::branches;
 use crate::relish::*;
-use crate::repository::Timeline;
+use crate::repository::{Timeline, TimelineEntry};
 use crate::tenant_mgr;
 use crate::walreceiver;
 use crate::PageServerConf;
@@ -279,7 +279,10 @@ impl PageServerHandler {
         let _enter = info_span!("pagestream", timeline = %timelineid, tenant = %tenantid).entered();
 
         // Check that the timeline exists
-        let timeline = tenant_mgr::get_timeline_for_tenant(tenantid, timelineid)?;
+        let timeline = match tenant_mgr::get_timeline_for_tenant(tenantid, timelineid)? {
+            TimelineEntry::Local(timeline) => timeline,
+            TimelineEntry::Remote(_) => bail!("Cannot handle pagerequests for a remote timeline"),
+        };
 
         /* switch client to COPYBOTH */
         pgb.write_message(&BeMessage::CopyBothResponse)?;
@@ -301,17 +304,17 @@ impl PageServerHandler {
                             PagestreamFeMessage::Exists(req) => SMGR_QUERY_TIME
                                 .with_label_values(&["get_rel_exists"])
                                 .observe_closure_duration(|| {
-                                    self.handle_get_rel_exists_request(&*timeline, &req)
+                                    self.handle_get_rel_exists_request(timeline.as_ref(), &req)
                                 }),
                             PagestreamFeMessage::Nblocks(req) => SMGR_QUERY_TIME
                                 .with_label_values(&["get_rel_size"])
                                 .observe_closure_duration(|| {
-                                    self.handle_get_nblocks_request(&*timeline, &req)
+                                    self.handle_get_nblocks_request(timeline.as_ref(), &req)
                                 }),
                             PagestreamFeMessage::GetPage(req) => SMGR_QUERY_TIME
                                 .with_label_values(&["get_page_at_lsn"])
                                 .observe_closure_duration(|| {
-                                    self.handle_get_page_at_lsn_request(&*timeline, &req)
+                                    self.handle_get_page_at_lsn_request(timeline.as_ref(), &req)
                                 }),
                         };
 
@@ -455,7 +458,12 @@ impl PageServerHandler {
         let _enter = span.enter();
 
         // check that the timeline exists
-        let timeline = tenant_mgr::get_timeline_for_tenant(tenantid, timelineid)?;
+        let timeline = match tenant_mgr::get_timeline_for_tenant(tenantid, timelineid)? {
+            TimelineEntry::Local(timeline) => timeline,
+            TimelineEntry::Remote(_) => {
+                bail!("Cannot handle basebackup request for a remote timeline")
+            }
+        };
         if let Some(lsn) = lsn {
             timeline
                 .check_lsn_is_in_scope(lsn)

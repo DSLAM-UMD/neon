@@ -6,6 +6,7 @@
 //! We keep one WAL receiver active per timeline.
 
 use crate::relish::*;
+use crate::repository::TimelineEntry;
 use crate::restore_local_repo;
 use crate::tenant_mgr;
 use crate::tenant_mgr::TenantState;
@@ -204,7 +205,14 @@ fn walreceiver_main(
     let end_of_wal = Lsn::from(u64::from(identify.xlogpos));
     let mut caught_up = false;
 
-    let timeline = tenant_mgr::get_timeline_for_tenant(tenantid, timelineid)?;
+    let timeline = match tenant_mgr::get_timeline_for_tenant(tenantid, timelineid)? {
+        TimelineEntry::Local(timeline) => timeline,
+        TimelineEntry::Remote(_) => bail!(
+            "Can not start the walrecever for a remote tenant {}, timeline {}",
+            tenantid,
+            timelineid,
+        ),
+    };
 
     //
     // Start streaming the WAL, from where we left off previously.
