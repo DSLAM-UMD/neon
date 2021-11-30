@@ -149,7 +149,8 @@ pub fn create_repo(
         conf,
         wal_redo_manager,
         tenantid,
-        false,
+        // TODO kb why unconditionally uploading? How to use the conf? When the false is used in prod?
+        true,
     ));
 
     // Load data into pageserver

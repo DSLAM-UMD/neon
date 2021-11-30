@@ -85,7 +85,7 @@ use crate::{
     layered_repository::metadata::TimelineMetadata,
     remote_storage::storage_sync::{compression::read_archive_header, index::IndexEntry},
     repository::TimelineState,
-    tenant_mgr::{perform_post_timeline_sync_steps, TimelineRegistration},
+    tenant_mgr::set_timeline_states,
     PageServerConf,
 };
 
@@ -285,7 +285,7 @@ pub(super) fn spawn_storage_sync_thread<
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
 ) -> anyhow::Result<(
-    HashMap<TimelineSyncId, TimelineState>,
+    HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>>,
     thread::JoinHandle<anyhow::Result<()>>,
 )> {
     let (sender, receiver) = mpsc::unbounded_channel();
@@ -302,7 +302,7 @@ pub(super) fn spawn_storage_sync_thread<
             "Failed to list remote storage contents and collect the timeline archive description",
         )?);
 
-    let local_timeline_state = schedule_first_sync_tasks(&remote_index, local_timeline_files);
+    let initial_timeline_states = schedule_first_sync_tasks(&remote_index, local_timeline_files);
 
     let handle = thread::Builder::new()
         .name("Remote storage sync thread".to_string())
@@ -318,7 +318,7 @@ pub(super) fn spawn_storage_sync_thread<
             )
         })
         .context("Failed to spawn remote storage sync thread")?;
-    Ok((local_timeline_state, handle))
+    Ok((initial_timeline_states, handle))
 }
 
 async fn collect_timeline_descriptions<
@@ -366,7 +366,7 @@ fn storage_sync_loop<
     let index = Arc::new(RwLock::new(index));
     let remote_storage = Arc::new(remote_storage);
     while !crate::tenant_mgr::shutdown_requested() {
-        let registration_steps = runtime.block_on(loop_step(
+        let new_timeline_states = runtime.block_on(loop_step(
             config,
             &mut receiver,
             // TODO kb return it back under a single Arc?
@@ -376,7 +376,7 @@ fn storage_sync_loop<
             max_sync_errors,
         ));
         // Batch timeline download registration to ensure that the external registration code won't block any running tasks before.
-        perform_post_timeline_sync_steps(config, registration_steps);
+        set_timeline_states(config, new_timeline_states);
     }
 
     debug!("Shutdown requested, stopping");
@@ -393,7 +393,7 @@ async fn loop_step<
     index: Arc<RwLock<RemoteTimelineIndex>>,
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
-) -> HashMap<(ZTenantId, ZTimelineId), TimelineRegistration> {
+) -> HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>> {
     let max_concurrent_sync = max_concurrent_sync.get();
     let mut next_tasks = Vec::with_capacity(max_concurrent_sync);
 
@@ -444,16 +444,20 @@ async fn loop_step<
         })
         .collect::<FuturesUnordered<_>>();
 
-    let mut extra_sync_steps = HashMap::with_capacity(max_concurrent_sync);
-    while let Some((sync_id, extra_step)) = task_batch.next().await {
+    let mut new_timeline_states: HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>> =
+        HashMap::with_capacity(max_concurrent_sync);
+    while let Some((sync_id, state_update)) = task_batch.next().await {
         debug!("Finished storage sync task for sync id {}", sync_id);
-        if let Some(extra_step) = extra_step {
+        if let Some(state_update) = state_update {
             let TimelineSyncId(tenant_id, timeline_id) = sync_id;
-            extra_sync_steps.insert((tenant_id, timeline_id), extra_step);
+            new_timeline_states
+                .entry(tenant_id)
+                .or_default()
+                .insert(timeline_id, state_update);
         }
     }
 
-    extra_sync_steps
+    new_timeline_states
 }
 
 async fn process_task<
@@ -465,13 +469,13 @@ async fn process_task<
     task: SyncTask,
     max_sync_errors: NonZeroU32,
     index: Arc<RwLock<RemoteTimelineIndex>>,
-) -> Option<TimelineRegistration> {
+) -> Option<TimelineState> {
     if task.retries > max_sync_errors.get() {
         error!(
             "Evicting task {:?} that failed {} times, exceeding the error theshold",
             task.kind, task.retries
         );
-        return Some(TimelineRegistration::Evict);
+        return Some(TimelineState::Evicted);
     }
 
     if task.retries > 0 {
@@ -496,7 +500,7 @@ async fn process_task<
             )
             .await;
             register_sync_status(sync_start, "download", sync_status);
-            Some(TimelineRegistration::Download)
+            Some(TimelineState::AwaitsDownload)
         }
         SyncKind::Upload(layer_upload) => {
             let sync_status = upload_timeline_checkpoint(
@@ -517,13 +521,15 @@ async fn process_task<
 fn schedule_first_sync_tasks(
     index: &RemoteTimelineIndex,
     local_timeline_files: HashMap<TimelineSyncId, (TimelineMetadata, Vec<PathBuf>)>,
-) -> HashMap<TimelineSyncId, TimelineState> {
-    let mut local_timeline_statuses = HashMap::new();
+) -> HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>> {
+    let mut initial_timeline_statuses: HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>> =
+        HashMap::new();
 
     let mut new_sync_tasks =
         VecDeque::with_capacity(local_timeline_files.len().max(local_timeline_files.len()));
 
     for (sync_id, (local_metadata, local_files)) in local_timeline_files {
+        let TimelineSyncId(tenant_id, timeline_id) = sync_id;
         match index.entry(&sync_id) {
             Some(index_entry) => {
                 let timeline_status = compare_local_and_remote_timeline(
@@ -533,7 +539,10 @@ fn schedule_first_sync_tasks(
                     local_files,
                     index_entry,
                 );
-                local_timeline_statuses.insert(sync_id, timeline_status);
+                initial_timeline_statuses
+                    .entry(tenant_id)
+                    .or_default()
+                    .insert(timeline_id, timeline_status);
             }
             None => {
                 new_sync_tasks.push_back(SyncTask::new(
@@ -544,23 +553,34 @@ fn schedule_first_sync_tasks(
                         metadata: local_metadata,
                     }),
                 ));
-                local_timeline_statuses.insert(sync_id, TimelineState::Ready);
+                initial_timeline_statuses
+                    .entry(tenant_id)
+                    .or_default()
+                    .insert(timeline_id, TimelineState::Ready);
             }
         }
     }
 
-    for cloud_only_id in index
+    for TimelineSyncId(cloud_only_tenant_id, cloud_only_timeline_id) in index
         .all_ids()
-        .filter(|remote_id| !local_timeline_statuses.contains_key(remote_id))
+        .filter(|remote_id| {
+            initial_timeline_statuses
+                .get(&remote_id.0)
+                .and_then(|timelines| timelines.get(&remote_id.1))
+                .is_none()
+        })
         .collect::<Vec<_>>()
     {
-        local_timeline_statuses.insert(cloud_only_id, TimelineState::CloudOnly);
+        initial_timeline_statuses
+            .entry(cloud_only_tenant_id)
+            .or_default()
+            .insert(cloud_only_timeline_id, TimelineState::CloudOnly);
     }
 
     new_sync_tasks.into_iter().for_each(|task| {
         sync_queue::push(task);
     });
-    local_timeline_statuses
+    initial_timeline_statuses
 }
 
 fn compare_local_and_remote_timeline(

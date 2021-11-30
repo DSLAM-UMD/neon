@@ -10,22 +10,13 @@ use std::time::Duration;
 use zenith_utils::lsn::{Lsn, RecordLsn};
 use zenith_utils::zid::ZTimelineId;
 
-// TODO kb does this belong here? + move below and add filelds?
-pub enum TimelineState {
-    Ready,
-    AwaitsDownload,
-    CloudOnly,
-    Evicted,
-}
-
 ///
 /// A repository corresponds to one .zenith directory. One repository holds multiple
 /// timelines, forked off from the same initial call to 'initdb'.
 pub trait Repository: Send + Sync {
     fn shutdown(&self) -> Result<()>;
 
-    /// Stops all timeline-related process in the repository and removes the timeline data from memory.
-    fn unload_timeline(&self, timeline_id: ZTimelineId) -> Result<()>;
+    fn set_timeline_state(&self, timeline_id: ZTimelineId, new_state: TimelineState) -> Result<()>;
 
     /// Get Timeline handle for given zenith timeline ID.
     fn get_timeline(&self, timelineid: ZTimelineId) -> Result<Arc<dyn Timeline>>;
@@ -60,6 +51,14 @@ pub trait Repository: Send + Sync {
     /// perform one checkpoint iteration, flushing in-memory data on disk.
     /// this function is periodically called by checkponter thread.
     fn checkpoint_iteration(&self, cconf: CheckpointConfig) -> Result<()>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TimelineState {
+    Ready,
+    AwaitsDownload,
+    CloudOnly,
+    Evicted,
 }
 
 ///
