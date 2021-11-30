@@ -574,14 +574,14 @@ fn start_pageserver(conf: &'static PageServerConf) -> Result<()> {
     // don't spawn threads before daemonizing
     let mut join_handles = Vec::new();
 
-    let (initial_timeline_states, handle) = remote_storage::start_local_timeline_sync(conf)
+    let sync_startup = remote_storage::start_local_timeline_sync(conf)
         .context("Failed to set up local files sync with external storage")?;
-    if let Some(handle) = handle {
+    if let Some(handle) = sync_startup.sync_loop_handle {
         join_handles.push(handle);
     }
 
     // Initialize tenant manager.
-    tenant_mgr::set_timeline_states(conf, initial_timeline_states);
+    tenant_mgr::set_timeline_states(conf, sync_startup.initial_timeline_states);
 
     // initialize authentication for incoming connections
     let auth = match &conf.auth_type {

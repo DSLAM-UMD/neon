@@ -35,9 +35,7 @@ use self::metadata::{metadata_path, TimelineMetadata};
 use crate::page_cache;
 use crate::relish::*;
 use crate::remote_storage::{schedule_timeline_checkpoint_upload, schedule_timeline_download};
-use crate::repository::{
-    GcResult, Repository, Timeline, TimelineEntry, TimelineState, TimelineWriter, WALRecord,
-};
+use crate::repository::{GcResult, Repository, Timeline, TimelineState, TimelineWriter, WALRecord};
 use crate::tenant_mgr;
 use crate::walreceiver;
 use crate::walreceiver::IS_WAL_RECEIVER;
@@ -138,16 +136,12 @@ pub struct LayeredRepository {
 
 /// Public interface
 impl Repository for LayeredRepository {
-    fn get_timeline(&self, timelineid: ZTimelineId) -> Result<TimelineEntry> {
+    fn get_timeline(&self, timelineid: ZTimelineId) -> Result<Option<Arc<dyn Timeline>>> {
         let mut timelines = self.timelines.lock().unwrap();
         Ok(
             match self.get_timeline_locked(timelineid, &mut timelines)? {
-                LayeredTimelineEntry::Local(timeline) => TimelineEntry::Local(timeline),
-                LayeredTimelineEntry::Remote(timeline) => {
-                    info!("Accessed a remote timeline {} for tenant {}, scheduling a timeline download", timelineid, self.tenantid);
-                    schedule_timeline_download(self.tenantid, timelineid);
-                    TimelineEntry::Remote(timeline)
-                }
+                LayeredTimelineEntry::Local(local) => Some(local),
+                LayeredTimelineEntry::Remote(_) => None,
             },
         )
     }
@@ -174,7 +168,7 @@ impl Repository for LayeredRepository {
             Arc::clone(&self.walredo_mgr),
             0,
             true,
-        )?;
+        );
 
         let timeline_rc = Arc::new(timeline);
         let r = timelines.insert(timelineid, LayeredTimelineEntry::Local(timeline_rc.clone()));
@@ -190,9 +184,10 @@ impl Repository for LayeredRepository {
         let mut timelines = self.timelines.lock().unwrap();
         let src_timeline = match self.get_timeline_locked(src, &mut timelines)? {
             LayeredTimelineEntry::Local(timeline) => timeline,
-            LayeredTimelineEntry::Remote(_) => {
-                bail!("Cannot branch off the timeline that's remote")
-            }
+            LayeredTimelineEntry::Remote(timeline_id) => bail!(
+                "Cannot branch off the timeline {} that's remote",
+                timeline_id
+            ),
         };
 
         src_timeline
@@ -261,7 +256,13 @@ impl Repository for LayeredRepository {
             .iter()
             .filter_map(|(timelineid, timeline)| match timeline {
                 LayeredTimelineEntry::Local(timeline) => Some((*timelineid, timeline.clone())),
-                LayeredTimelineEntry::Remote(_) => None,
+                LayeredTimelineEntry::Remote(_) => {
+                    debug!(
+                        "Cannot run the checkpoint for remote timeline {}",
+                        timelineid
+                    );
+                    None
+                }
             })
             .collect();
         drop(timelines);
@@ -288,26 +289,36 @@ impl Repository for LayeredRepository {
     }
 
     fn set_timeline_state(&self, timeline_id: ZTimelineId, new_state: TimelineState) -> Result<()> {
+        let mut timelines = self.timelines.lock().unwrap();
+        let old_timeline = timelines.remove(&timeline_id);
+        let mut timeline_to_shutdown = None;
         match new_state {
             TimelineState::Ready => {
-                // self.get_timeline_locked(timelineid, &mut timelines)?
-                todo!()
+                let locked_timeline = self.get_timeline_locked(timeline_id, &mut timelines)?;
+                ensure!(
+                    matches!(locked_timeline, LayeredTimelineEntry::Local(_)),
+                    "Failed to load local ready timeline {} for tenant {}",
+                    timeline_id,
+                    self.tenantid
+                );
             }
-            TimelineState::AwaitsDownload => todo!(),
-            TimelineState::CloudOnly => todo!(),
-            TimelineState::Evicted => {
-                let mut timelines = self.timelines.lock().unwrap();
-                let removed_timeline = match timelines.remove(&timeline_id) {
-                    Some(timeline) => timeline,
-                    None => {
-                        warn!("Timeline {} not found, nothing to remove", timeline_id);
-                        return Ok(());
-                    }
-                };
-                drop(timelines);
-                shutdown_timeline(timeline_id, &removed_timeline)?;
+            TimelineState::Evicted => match old_timeline {
+                Some(timeline) => timeline_to_shutdown = Some(timeline),
+                None => warn!("Timeline {} not found, nothing to remove", timeline_id),
+            },
+            TimelineState::AwaitsDownload | TimelineState::CloudOnly => {
+                timelines.insert(timeline_id, LayeredTimelineEntry::Remote(timeline_id));
+                if let Some(local_timeline @ LayeredTimelineEntry::Local(_)) = old_timeline {
+                    timeline_to_shutdown = Some(local_timeline);
+                }
             }
         }
+
+        drop(timelines);
+        if let Some(timeline) = timeline_to_shutdown {
+            shutdown_timeline(timeline_id, &timeline)?;
+        }
+
         Ok(())
     }
 }
@@ -330,14 +341,14 @@ fn shutdown_timeline(
 #[derive(Clone)]
 enum LayeredTimelineEntry {
     Local(Arc<LayeredTimeline>),
-    Remote(Arc<LayeredTimeline>),
+    Remote(ZTimelineId),
 }
 
 impl LayeredTimelineEntry {
-    fn timeline(&self) -> &LayeredTimeline {
+    fn timeline_id(&self) -> ZTimelineId {
         match self {
-            LayeredTimelineEntry::Local(timeline) => timeline,
-            LayeredTimelineEntry::Remote(timeline) => timeline,
+            LayeredTimelineEntry::Local(timeline) => timeline.timelineid,
+            LayeredTimelineEntry::Remote(timeline_id) => *timeline_id,
         }
     }
 }
@@ -352,7 +363,16 @@ impl LayeredRepository {
         timelines: &mut HashMap<ZTimelineId, LayeredTimelineEntry>,
     ) -> Result<LayeredTimelineEntry> {
         match timelines.get(&timelineid) {
-            Some(timeline_entry) => Ok(timeline_entry.clone()),
+            Some(timeline_entry) => {
+                if let LayeredTimelineEntry::Remote(_) = timeline_entry {
+                    debug!(
+                        "Accessed a remote timeline {} for tenant {}, scheduling a timeline download",
+                        timelineid, self.tenantid
+                    );
+                    schedule_timeline_download(self.tenantid, timelineid);
+                }
+                Ok(timeline_entry.clone())
+            }
             None => {
                 let metadata = Self::load_metadata(self.conf, timelineid, self.tenantid)
                     .context("failed to load metadata")?;
@@ -375,14 +395,14 @@ impl LayeredRepository {
 
                 let mut timeline = LayeredTimeline::new(
                     self.conf,
-                    metadata.clone(),
+                    metadata,
                     ancestor,
                     timelineid,
                     self.tenantid,
                     Arc::clone(&self.walredo_mgr),
                     0, // init with 0 and update after layers are loaded,
                     self.upload_relishes,
-                )?;
+                );
 
                 timeline
                     .load_layer_map(disk_consistent_lsn)
@@ -519,11 +539,30 @@ impl LayeredRepository {
         //Now collect info about branchpoints
         let mut all_branchpoints: BTreeSet<(ZTimelineId, Lsn)> = BTreeSet::new();
         for timelineid in &timelineids {
-            let timeline_entry = self.get_timeline_locked(*timelineid, &mut *timelines)?;
-            let timeline = timeline_entry.timeline();
+            let timeline = match self.get_timeline_locked(*timelineid, &mut *timelines)? {
+                LayeredTimelineEntry::Local(timeline) => timeline,
+                LayeredTimelineEntry::Remote(_) => {
+                    warn!(
+                        "Timeline {} is not local, cannot proceed with gc",
+                        timelineid
+                    );
+                    return Ok(totals);
+                }
+            };
 
             if let Some(ancestor_timeline) = &timeline.ancestor_timeline {
-                let ancestor_timeline = ancestor_timeline.timeline();
+                let ancestor_timeline = match local_timeline_only(self.tenantid, ancestor_timeline)
+                {
+                    Some(timeline) => timeline,
+                    None => {
+                        warn!(
+                            "Timeline {} has ancestor {} is not local, cannot proceed with gc",
+                            timelineid,
+                            ancestor_timeline.timeline_id()
+                        );
+                        return Ok(totals);
+                    }
+                };
                 // If target_timeline is specified, we only need to know branchpoints of its children
                 if let Some(timelineid) = target_timelineid {
                     if ancestor_timeline.timelineid == timelineid {
@@ -678,11 +717,9 @@ impl Timeline for LayeredTimeline {
     }
 
     fn get_ancestor_timeline_id(&self) -> Option<ZTimelineId> {
-        match self.ancestor_timeline.as_ref()? {
-            LayeredTimelineEntry::Local(timeline) | LayeredTimelineEntry::Remote(timeline) => {
-                Some(timeline.timelineid)
-            }
-        }
+        self.ancestor_timeline
+            .as_ref()
+            .map(LayeredTimelineEntry::timeline_id)
     }
 
     /// Wait until WAL has been received up to the given LSN.
@@ -847,11 +884,17 @@ impl Timeline for LayeredTimeline {
                 }
             }
 
-            if let Some(ancestor) = timeline.ancestor_timeline.as_ref() {
-                timeline = ancestor.timeline();
-                continue;
-            } else {
-                break;
+            match &timeline.ancestor_timeline {
+                None => break,
+                Some(ancestor_entry) => {
+                    match local_timeline_only(self.tenantid, ancestor_entry) {
+                        Some(ancestor) => {
+                            timeline = ancestor;
+                            continue;
+                        }
+                        None => bail!("Cannot list relishes for timeline {}  tenant {} due to its ancestor being remote only", self.timelineid, self.tenantid),
+                    }
+                }
             }
         }
 
@@ -917,14 +960,11 @@ impl Timeline for LayeredTimeline {
     }
 
     fn get_start_lsn(&self) -> Lsn {
-        if let Some(
-            LayeredTimelineEntry::Local(ancestor) | LayeredTimelineEntry::Remote(ancestor),
-        ) = self.ancestor_timeline.as_ref()
-        {
-            ancestor.get_start_lsn()
-        } else {
-            self.ancestor_lsn
-        }
+        self.ancestor_timeline
+            .as_ref()
+            .and_then(|ancestor_entry| local_timeline_only(self.tenantid, ancestor_entry))
+            .map(Timeline::get_start_lsn)
+            .unwrap_or(self.ancestor_lsn)
     }
 
     fn get_current_logical_size(&self) -> usize {
@@ -988,11 +1028,11 @@ impl LayeredTimeline {
         walredo_mgr: Arc<dyn WalRedoManager + Send + Sync>,
         current_logical_size: usize,
         upload_relishes: bool,
-    ) -> Result<LayeredTimeline> {
+    ) -> LayeredTimeline {
         let current_logical_size_gauge = LOGICAL_TIMELINE_SIZE
             .get_metric_with_label_values(&[&tenantid.to_string(), &timelineid.to_string()])
             .unwrap();
-        let timeline = LayeredTimeline {
+        LayeredTimeline {
             conf,
             timelineid,
             tenantid,
@@ -1017,8 +1057,7 @@ impl LayeredTimeline {
 
             latest_gc_cutoff_lsn: AtomicLsn::from(metadata.latest_gc_cutoff_lsn()),
             initdb_lsn: metadata.initdb_lsn(),
-        };
-        Ok(timeline)
+        }
     }
 
     ///
@@ -1135,7 +1174,19 @@ impl LayeredTimeline {
 
         while lsn < timeline.ancestor_lsn {
             trace!("going into ancestor {} ", timeline.ancestor_lsn);
-            timeline = timeline.ancestor_timeline.as_ref().unwrap().timeline();
+            timeline = match timeline
+                .ancestor_timeline
+                .as_ref()
+                .and_then(|ancestor| local_timeline_only(self.tenantid, ancestor))
+            {
+                Some(timeline) => timeline,
+                None => {
+                    bail!(
+                        "Cannot get the whole layer for read locked: timeline {} is not present locally",
+                        self.timelineid
+                    )
+                }
+            };
         }
 
         // Now we have the right starting timeline for our search.
@@ -1174,13 +1225,21 @@ impl LayeredTimeline {
             }
 
             // If not, check if there's a layer on the ancestor timeline
-            if let Some(ancestor) = &timeline.ancestor_timeline {
-                lsn = timeline.ancestor_lsn;
-                timeline = ancestor.timeline();
-                trace!("recursing into ancestor at {}/{}", timeline.timelineid, lsn);
-                continue;
+            match &timeline.ancestor_timeline {
+                Some(ancestor) => match local_timeline_only(self.tenantid, ancestor) {
+                    Some(ancestor) => {
+                        lsn = timeline.ancestor_lsn;
+                        timeline = ancestor;
+                        trace!("recursing into ancestor at {}/{}", timeline.timelineid, lsn);
+                        continue;
+                    }
+                    None => bail!(
+                        "Cannot get the whole layer for read locked: timeline {} is not present locally",
+                        self.timelineid
+                    ),
+                },
+                None => return Ok(None),
             }
-            return Ok(None);
         }
     }
 
@@ -1395,7 +1454,7 @@ impl LayeredTimeline {
             let ancestor_timelineid = self
                 .ancestor_timeline
                 .as_ref()
-                .map(|entry| entry.timeline().timelineid);
+                .map(LayeredTimelineEntry::timeline_id);
 
             let metadata = TimelineMetadata::new(
                 disk_consistent_lsn,
@@ -2146,4 +2205,21 @@ fn rename_to_backup(path: PathBuf) -> anyhow::Result<()> {
         "couldn't find an unused backup number for {:?}",
         path
     ))
+}
+
+fn local_timeline_only(
+    tenant_id: ZTenantId,
+    entry: &LayeredTimelineEntry,
+) -> Option<&LayeredTimeline> {
+    match entry {
+        LayeredTimelineEntry::Local(local) => Some(local.as_ref()),
+        LayeredTimelineEntry::Remote(timeline_id) => {
+            debug!(
+                "Accessed a remote timeline {} for tenant {}, scheduling a timeline download",
+                timeline_id, tenant_id
+            );
+            schedule_timeline_download(tenant_id, *timeline_id);
+            None
+        }
+    }
 }

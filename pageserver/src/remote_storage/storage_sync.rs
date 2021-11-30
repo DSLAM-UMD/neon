@@ -80,7 +80,7 @@ use self::{
     index::{ArchiveDescription, ArchiveId, RemoteTimeline, RemoteTimelineIndex},
     upload::upload_timeline_checkpoint,
 };
-use super::{RemoteStorage, TimelineSyncId};
+use super::{RemoteStorage, SyncStartupData, TimelineSyncId};
 use crate::{
     layered_repository::metadata::TimelineMetadata,
     remote_storage::storage_sync::{compression::read_archive_header, index::IndexEntry},
@@ -295,10 +295,7 @@ pub(super) fn spawn_storage_sync_thread<
     remote_storage: S,
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
-) -> anyhow::Result<(
-    HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>>,
-    thread::JoinHandle<anyhow::Result<()>>,
-)> {
+) -> anyhow::Result<SyncStartupData> {
     let (sender, receiver) = mpsc::unbounded_channel();
     sync_queue::init(sender)?;
 
@@ -329,7 +326,10 @@ pub(super) fn spawn_storage_sync_thread<
             )
         })
         .context("Failed to spawn remote storage sync thread")?;
-    Ok((initial_timeline_states, handle))
+    Ok(SyncStartupData {
+        initial_timeline_states,
+        sync_loop_handle: Some(handle),
+    })
 }
 
 async fn collect_timeline_descriptions<
@@ -346,7 +346,7 @@ async fn collect_timeline_descriptions<
         .into_iter()
         .map(|remote_path| (storage.local_path(&remote_path), remote_path))
     {
-        match local_path.and_then(|local_path| index::parse_archive_description(local_path)) {
+        match local_path.and_then(index::parse_archive_description) {
             Ok((sync_id, archive_id, archive_description)) => {
                 description
                     .entry(sync_id)
@@ -374,15 +374,12 @@ fn storage_sync_loop<
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
 ) -> anyhow::Result<()> {
-    let index = Arc::new(RwLock::new(index));
-    let remote_storage = Arc::new(remote_storage);
+    let remote_assets = Arc::new((remote_storage, RwLock::new(index)));
     while !crate::tenant_mgr::shutdown_requested() {
         let new_timeline_states = runtime.block_on(loop_step(
             config,
             &mut receiver,
-            // TODO kb return it back under a single Arc?
-            Arc::clone(&remote_storage),
-            Arc::clone(&index),
+            Arc::clone(&remote_assets),
             max_concurrent_sync,
             max_sync_errors,
         ));
@@ -400,8 +397,7 @@ async fn loop_step<
 >(
     config: &'static PageServerConf,
     receiver: &mut UnboundedReceiver<SyncTask>,
-    remote_storage: Arc<S>,
-    index: Arc<RwLock<RemoteTimelineIndex>>,
+    remote_assets: Arc<(S, RwLock<RemoteTimelineIndex>)>,
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
 ) -> HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>> {
@@ -435,10 +431,9 @@ async fn loop_step<
             let sync_id = task.sync_id;
             let extra_step = match tokio::spawn(process_task(
                 config,
-                Arc::clone(&remote_storage),
+                Arc::clone(&remote_assets),
                 task,
                 max_sync_errors,
-                Arc::clone(&index),
             ))
             .await
             {
@@ -476,10 +471,9 @@ async fn process_task<
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     config: &'static PageServerConf,
-    remote_storage: Arc<S>,
+    remote_assets: Arc<(S, RwLock<RemoteTimelineIndex>)>,
     task: SyncTask,
     max_sync_errors: NonZeroU32,
-    index: Arc<RwLock<RemoteTimelineIndex>>,
 ) -> Option<TimelineState> {
     if task.retries > max_sync_errors.get() {
         error!(
@@ -503,8 +497,7 @@ async fn process_task<
         SyncKind::Download(download_data) => {
             let sync_status = download_timeline(
                 config,
-                index,
-                remote_storage,
+                remote_assets,
                 task.sync_id,
                 download_data,
                 task.retries + 1,
@@ -516,8 +509,7 @@ async fn process_task<
         SyncKind::Upload(layer_upload) => {
             let sync_status = upload_timeline_checkpoint(
                 config,
-                index,
-                remote_storage,
+                remote_assets,
                 task.sync_id,
                 layer_upload,
                 task.retries + 1,
@@ -651,8 +643,7 @@ async fn update_index_description<
     P: Send + Sync + 'static,
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
-    storage: &S,
-    index: &RwLock<RemoteTimelineIndex>,
+    (storage, index): &(S, RwLock<RemoteTimelineIndex>),
     id: TimelineSyncId,
 ) -> anyhow::Result<RemoteTimeline> {
     let mut index_write = index.write().await;
@@ -724,30 +715,30 @@ mod test_utils {
     #[track_caller]
     pub async fn ensure_correct_timeline_upload(
         harness: &RepoHarness,
-        index: Arc<RwLock<RemoteTimelineIndex>>,
-        remote_storage: Arc<LocalFs>,
+        remote_assets: Arc<(LocalFs, RwLock<RemoteTimelineIndex>)>,
         timeline_id: ZTimelineId,
         new_upload: NewCheckpoint,
     ) {
         let sync_id = TimelineSyncId(harness.tenant_id, timeline_id);
         upload_timeline_checkpoint(
             harness.conf,
-            Arc::clone(&index),
-            Arc::clone(&remote_storage),
+            Arc::clone(&remote_assets),
             sync_id,
             new_upload.clone(),
             0,
         )
         .await;
+
+        let index = &remote_assets.1;
         assert_index_descriptions(
-            &index,
-            collect_timeline_descriptions(remote_storage.as_ref())
+            index,
+            collect_timeline_descriptions(&remote_assets.0)
                 .await
                 .unwrap(),
         )
         .await;
 
-        let new_remote_timeline = expect_timeline(index.as_ref(), sync_id).await;
+        let new_remote_timeline = expect_timeline(index, sync_id).await;
         let new_remote_lsn = new_remote_timeline
             .checkpoints()
             .max()
@@ -799,10 +790,12 @@ mod test_utils {
 
         for (expected_sync_id, timeline_descriptions) in expected_descriptions {
             let index_read = index.read().await;
-            let actual_timeline = index_read.entry(&expected_sync_id).expect(&format!(
-                "Failed to find an expected timeline with id {} in the index",
-                expected_sync_id
-            ));
+            let actual_timeline = index_read.entry(&expected_sync_id).unwrap_or_else(|| {
+                panic!(
+                    "Failed to find an expected timeline with id {} in the index",
+                    expected_sync_id
+                )
+            });
             let expected_lsns = timeline_descriptions
                 .values()
                 .map(|description| description.disk_consistent_lsn)
