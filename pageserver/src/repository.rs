@@ -19,7 +19,8 @@ pub trait Repository: Send + Sync {
     fn set_timeline_state(&self, timeline_id: ZTimelineId, new_state: TimelineState) -> Result<()>;
 
     /// Get Timeline handle for given zenith timeline ID.
-    fn get_timeline(&self, timelineid: ZTimelineId) -> Result<TimelineEntry>;
+    /// Returns [`None`] for timelines, that are known, but not present locally in pageserver's workdir.
+    fn get_timeline(&self, timelineid: ZTimelineId) -> Result<Option<Arc<dyn Timeline>>>;
 
     /// Create a new, empty timeline. The caller is responsible for loading data into it
     /// Initdb lsn is provided for timeline impl to be able to perform checks for some operations against it.
@@ -59,12 +60,6 @@ pub enum TimelineState {
     AwaitsDownload,
     CloudOnly,
     Evicted,
-}
-
-#[derive(Clone)]
-pub enum TimelineEntry {
-    Local(Arc<dyn Timeline>),
-    Remote(Arc<dyn Timeline>),
 }
 
 ///
@@ -713,8 +708,8 @@ mod tests {
         // Create a branch, check that the relation is visible there
         repo.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Lsn(0x30))?;
         let newtline = match repo.get_timeline(NEW_TIMELINE_ID)? {
-            TimelineEntry::Local(timeline) => timeline,
-            TimelineEntry::Remote(_) => panic!("Should not have a remote timeline"),
+            Some(timeline) => timeline,
+            None => panic!("Should not have a remote timeline"),
         };
         let new_writer = newtline.writer();
 
@@ -774,8 +769,8 @@ mod tests {
         // Branch the history, modify relation differently on the new timeline
         repo.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Lsn(0x30))?;
         let newtline = match repo.get_timeline(NEW_TIMELINE_ID)? {
-            TimelineEntry::Local(timeline) => timeline,
-            TimelineEntry::Remote(_) => panic!("Should not have a remote timeline"),
+            Some(timeline) => timeline,
+            None => panic!("Should not have a remote timeline"),
         };
         let new_writer = newtline.writer();
 
@@ -925,8 +920,8 @@ mod tests {
 
         repo.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Lsn(0x40))?;
         let newtline = match repo.get_timeline(NEW_TIMELINE_ID)? {
-            TimelineEntry::Local(timeline) => timeline,
-            TimelineEntry::Remote(_) => panic!("Should not have a remote timeline"),
+            Some(timeline) => timeline,
+            None => panic!("Should not have a remote timeline"),
         };
 
         // this removes layers before lsn 40 (50 minus 10), so there are two remaining layers, image and delta for 31-50
@@ -946,8 +941,8 @@ mod tests {
 
         repo.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Lsn(0x40))?;
         let newtline = match repo.get_timeline(NEW_TIMELINE_ID)? {
-            TimelineEntry::Local(timeline) => timeline,
-            TimelineEntry::Remote(_) => panic!("Should not have a remote timeline"),
+            Some(timeline) => timeline,
+            None => panic!("Should not have a remote timeline"),
         };
 
         make_some_layers(&newtline, Lsn(0x60))?;

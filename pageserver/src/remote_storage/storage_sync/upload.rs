@@ -23,8 +23,7 @@ pub(super) async fn upload_timeline_checkpoint<
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     config: &'static PageServerConf,
-    index: Arc<RwLock<RemoteTimelineIndex>>,
-    remote_storage: Arc<S>,
+    remote_assets: Arc<(S, RwLock<RemoteTimelineIndex>)>,
     sync_id: TimelineSyncId,
     new_checkpoint: NewCheckpoint,
     retries: u32,
@@ -32,13 +31,15 @@ pub(super) async fn upload_timeline_checkpoint<
     debug!("Uploading checkpoint for sync id {}", sync_id);
     let new_upload_lsn = new_checkpoint.metadata.disk_consistent_lsn();
 
+    let index = &remote_assets.1;
+
     let index_read = index.read().await;
     let remote_timeline = match index_read.entry(&sync_id) {
         None => None,
         Some(IndexEntry::Full(remote_timeline)) => Some(Cow::Borrowed(remote_timeline)),
         Some(IndexEntry::Description(_)) => {
             debug!("Found timeline description for the given ids, downloading the full index");
-            match update_index_description(remote_storage.as_ref(), index.as_ref(), sync_id).await {
+            match update_index_description(remote_assets.as_ref(), sync_id).await {
                 Ok(remote_timeline) => Some(Cow::Owned(remote_timeline)),
                 Err(e) => {
                     error!("Failed to download full timeline index: {:#}", e);
@@ -74,7 +75,7 @@ pub(super) async fn upload_timeline_checkpoint<
 
     match try_upload_checkpoint(
         config,
-        remote_storage,
+        Arc::clone(&remote_assets),
         sync_id,
         &new_checkpoint,
         already_uploaded_files,
@@ -124,7 +125,7 @@ async fn try_upload_checkpoint<
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     config: &'static PageServerConf,
-    remote_storage: Arc<S>,
+    remote_assets: Arc<(S, RwLock<RemoteTimelineIndex>)>,
     sync_id: TimelineSyncId,
     new_checkpoint: &NewCheckpoint,
     files_to_skip: BTreeSet<PathBuf>,
@@ -155,6 +156,7 @@ async fn try_upload_checkpoint<
         &new_checkpoint.metadata,
         move |archive_streamer, archive_name| async move {
             let timeline_dir = config.timeline_path(&timeline_id, &tenant_id);
+            let remote_storage = &remote_assets.0;
             remote_storage
                 .upload(
                     archive_streamer,
@@ -193,15 +195,12 @@ mod tests {
     async fn reupload_timeline() -> anyhow::Result<()> {
         let repo_harness = RepoHarness::create("reupload_timeline")?;
         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
-        let storage = Arc::new(LocalFs::new(
-            tempdir()?.path().to_owned(),
-            &repo_harness.conf.workdir,
-        )?);
-        let index = Arc::new(RwLock::new(RemoteTimelineIndex::new(
-            collect_timeline_descriptions(storage.as_ref())
-                .await
-                .unwrap(),
-        )));
+        let storage = LocalFs::new(tempdir()?.path().to_owned(), &repo_harness.conf.workdir)?;
+        let index = RwLock::new(RemoteTimelineIndex::new(
+            collect_timeline_descriptions(&storage).await.unwrap(),
+        ));
+        let remote_assets = Arc::new((storage, index));
+        let index = &remote_assets.1;
 
         let first_upload_metadata = dummy_metadata(Lsn(0x10));
         let first_checkpoint = create_local_timeline(
@@ -213,14 +212,13 @@ mod tests {
         let local_timeline_path = repo_harness.timeline_path(&TIMELINE_ID);
         ensure_correct_timeline_upload(
             &repo_harness,
-            Arc::clone(&index),
-            Arc::clone(&storage),
+            Arc::clone(&remote_assets),
             TIMELINE_ID,
             first_checkpoint,
         )
         .await;
 
-        let uploaded_timeline = expect_timeline(index.as_ref(), sync_id).await;
+        let uploaded_timeline = expect_timeline(index, sync_id).await;
         let uploaded_archives = uploaded_timeline
             .checkpoints()
             .map(ArchiveId)
@@ -265,14 +263,13 @@ mod tests {
         );
         ensure_correct_timeline_upload(
             &repo_harness,
-            Arc::clone(&index),
-            Arc::clone(&storage),
+            Arc::clone(&remote_assets),
             TIMELINE_ID,
             second_checkpoint,
         )
         .await;
 
-        let updated_timeline = expect_timeline(index.as_ref(), sync_id).await;
+        let updated_timeline = expect_timeline(index, sync_id).await;
         let mut updated_archives = updated_timeline
             .checkpoints()
             .map(ArchiveId)
@@ -331,14 +328,13 @@ mod tests {
         );
         ensure_correct_timeline_upload(
             &repo_harness,
-            Arc::clone(&index),
-            Arc::clone(&storage),
+            Arc::clone(&remote_assets),
             TIMELINE_ID,
             third_checkpoint,
         )
         .await;
 
-        let updated_timeline = expect_timeline(index.as_ref(), sync_id).await;
+        let updated_timeline = expect_timeline(index, sync_id).await;
         let mut updated_archives = updated_timeline
             .checkpoints()
             .map(ArchiveId)
@@ -390,15 +386,13 @@ mod tests {
     async fn reupload_timeline_rejected() -> anyhow::Result<()> {
         let repo_harness = RepoHarness::create("reupload_timeline_rejected")?;
         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
-        let storage = Arc::new(LocalFs::new(
-            tempdir()?.path().to_owned(),
-            &repo_harness.conf.workdir,
-        )?);
-        let index = Arc::new(RwLock::new(RemoteTimelineIndex::new(
-            collect_timeline_descriptions(storage.as_ref())
-                .await
-                .unwrap(),
-        )));
+        let storage = LocalFs::new(tempdir()?.path().to_owned(), &repo_harness.conf.workdir)?;
+        let index = RwLock::new(RemoteTimelineIndex::new(
+            collect_timeline_descriptions(&storage).await.unwrap(),
+        ));
+        let remote_assets = Arc::new((storage, index));
+        let storage = &remote_assets.0;
+        let index = &remote_assets.1;
 
         let first_upload_metadata = dummy_metadata(Lsn(0x10));
         let first_checkpoint = create_local_timeline(
@@ -409,15 +403,12 @@ mod tests {
         )?;
         ensure_correct_timeline_upload(
             &repo_harness,
-            Arc::clone(&index),
-            Arc::clone(&storage),
+            Arc::clone(&remote_assets),
             TIMELINE_ID,
             first_checkpoint,
         )
         .await;
-        let after_first_uploads = collect_timeline_descriptions(storage.as_ref())
-            .await
-            .unwrap();
+        let after_first_uploads = collect_timeline_descriptions(storage).await.unwrap();
 
         let normal_upload_metadata = dummy_metadata(Lsn(0x20));
         assert_ne!(
@@ -433,14 +424,13 @@ mod tests {
         )?;
         upload_timeline_checkpoint(
             repo_harness.conf,
-            Arc::clone(&index),
-            Arc::clone(&storage),
+            Arc::clone(&remote_assets),
             sync_id,
             checkpoint_with_no_files,
             0,
         )
         .await;
-        assert_index_descriptions(index.as_ref(), after_first_uploads.clone()).await;
+        assert_index_descriptions(index, after_first_uploads.clone()).await;
 
         let checkpoint_with_uploaded_lsn = create_local_timeline(
             &repo_harness,
@@ -450,14 +440,13 @@ mod tests {
         )?;
         upload_timeline_checkpoint(
             repo_harness.conf,
-            Arc::clone(&index),
-            Arc::clone(&storage),
+            Arc::clone(&remote_assets),
             sync_id,
             checkpoint_with_uploaded_lsn,
             0,
         )
         .await;
-        assert_index_descriptions(index.as_ref(), after_first_uploads.clone()).await;
+        assert_index_descriptions(index, after_first_uploads.clone()).await;
 
         Ok(())
     }

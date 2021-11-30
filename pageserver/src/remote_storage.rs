@@ -103,54 +103,54 @@ impl std::fmt::Display for TimelineSyncId {
     }
 }
 
+pub struct SyncStartupData {
+    pub initial_timeline_states: HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>>,
+    pub sync_loop_handle: Option<thread::JoinHandle<anyhow::Result<()>>>,
+}
+
 /// Based on the config, initiates the remote storage connection and starts a separate thread
 /// that ensures that pageserver and the remote storage are in sync with each other.
 /// If no external configuraion connection given, no thread or storage initialization is done.
 pub fn start_local_timeline_sync(
     config: &'static PageServerConf,
-) -> anyhow::Result<(
-    HashMap<ZTenantId, HashMap<ZTimelineId, TimelineState>>,
-    Option<thread::JoinHandle<anyhow::Result<()>>>,
-)> {
+) -> anyhow::Result<SyncStartupData> {
     let local_timeline_files = local_tenant_timeline_files(config)
         .context("Failed to collect local tenant timeline files")?;
 
     match &config.remote_storage_config {
-        Some(storage_config) => {
-            let max_concurrent_sync = storage_config.max_concurrent_sync;
-            let max_sync_errors = storage_config.max_sync_errors;
-            let (initial_timeline_states, handle) = match &storage_config.storage {
-                RemoteStorageKind::LocalFs(root) => storage_sync::spawn_storage_sync_thread(
-                    config,
-                    local_timeline_files,
-                    LocalFs::new(root.clone(), &config.workdir)?,
-                    max_concurrent_sync,
-                    max_sync_errors,
-                ),
-                RemoteStorageKind::AwsS3(s3_config) => storage_sync::spawn_storage_sync_thread(
-                    config,
-                    local_timeline_files,
-                    S3::new(s3_config, &config.workdir)?,
-                    max_concurrent_sync,
-                    max_sync_errors,
-                ),
-            }
-            .context("Failed to spawn the storage sync thread")?;
-            Ok((initial_timeline_states, Some(handle)))
+        Some(storage_config) => match &storage_config.storage {
+            RemoteStorageKind::LocalFs(root) => storage_sync::spawn_storage_sync_thread(
+                config,
+                local_timeline_files,
+                LocalFs::new(root.clone(), &config.workdir)?,
+                storage_config.max_concurrent_sync,
+                storage_config.max_sync_errors,
+            ),
+            RemoteStorageKind::AwsS3(s3_config) => storage_sync::spawn_storage_sync_thread(
+                config,
+                local_timeline_files,
+                S3::new(s3_config, &config.workdir)?,
+                storage_config.max_concurrent_sync,
+                storage_config.max_sync_errors,
+            ),
         }
+        .context("Failed to spawn the storage sync thread"),
         None => {
             info!("No remote storage configured, skipping storage sync, considering all local timelines with correct metadata files enabled");
-            let mut local_timeline_statuses: HashMap<
+            let mut initial_timeline_states: HashMap<
                 ZTenantId,
                 HashMap<ZTimelineId, TimelineState>,
             > = HashMap::new();
             for TimelineSyncId(tenant_id, timeline_id) in local_timeline_files.into_keys() {
-                local_timeline_statuses
+                initial_timeline_states
                     .entry(tenant_id)
                     .or_default()
                     .insert(timeline_id, TimelineState::Ready);
             }
-            Ok((local_timeline_statuses, None))
+            Ok(SyncStartupData {
+                initial_timeline_states,
+                sync_loop_handle: None,
+            })
         }
     }
 }
