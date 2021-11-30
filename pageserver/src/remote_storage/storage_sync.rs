@@ -273,6 +273,18 @@ pub fn schedule_timeline_checkpoint_upload(
     }
 }
 
+pub fn schedule_timeline_download(tenant_id: ZTenantId, timeline_id: ZTimelineId) {
+    sync_queue::push(SyncTask::new(
+        TimelineSyncId(tenant_id, timeline_id),
+        0,
+        SyncKind::Download(TimelineDownload {
+            files_to_skip: Arc::new(HashSet::new()),
+            // TODO kb this is wrong, so have to be archives to skip?
+            archives_to_download: Vec::new(),
+        }),
+    ));
+}
+
 /// Uses a remote storage given to start the storage sync loop.
 /// See module docs for loop step description.
 pub(super) fn spawn_storage_sync_thread<

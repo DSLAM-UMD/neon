@@ -21,10 +21,10 @@ use zenith_utils::logging;
 use zenith_utils::lsn::Lsn;
 use zenith_utils::zid::{ZTenantId, ZTimelineId};
 
-use crate::tenant_mgr;
 use crate::walredo::WalRedoManager;
 use crate::CheckpointConfig;
 use crate::{repository::Repository, PageServerConf};
+use crate::{repository::TimelineEntry, tenant_mgr};
 use crate::{restore_local_repo, LOG_FILE_NAME};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -54,7 +54,10 @@ impl BranchInfo {
             .to_string();
         let timeline_id = std::fs::read_to_string(path)?.parse::<ZTimelineId>()?;
 
-        let timeline = repo.get_timeline(timeline_id)?;
+        let timeline = match repo.get_timeline(timeline_id)? {
+            TimelineEntry::Local(local_entry) => local_entry,
+            TimelineEntry::Remote(remote_entry) => remote_entry,
+        };
 
         // we use ancestor lsn zero if we don't have an ancestor, so turn this into an option based on timeline id
         let (ancestor_id, ancestor_lsn) = match timeline.get_ancestor_timeline_id() {
@@ -150,6 +153,7 @@ pub fn create_repo(
         wal_redo_manager,
         tenantid,
         // TODO kb why unconditionally uploading? How to use the conf? When the false is used in prod?
+        // Also check the timelines' values for this flag, also quite unconditional
         true,
     ));
 
@@ -298,7 +302,10 @@ pub(crate) fn create_branch(
     }
 
     let mut startpoint = parse_point_in_time(conf, startpoint_str, tenantid)?;
-    let timeline = repo.get_timeline(startpoint.timelineid)?;
+    let timeline = match repo.get_timeline(startpoint.timelineid)? {
+        TimelineEntry::Local(timeline) => timeline,
+        TimelineEntry::Remote(_) => bail!("Cannot branch off the timeline that's remote"),
+    };
     if startpoint.lsn == Lsn(0) {
         // Find end of WAL on the old timeline
         let end_of_wal = timeline.get_last_record_lsn();
