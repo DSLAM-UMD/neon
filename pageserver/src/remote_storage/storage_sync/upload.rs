@@ -1,15 +1,17 @@
 use std::{borrow::Cow, collections::BTreeSet, path::PathBuf, sync::Arc};
 
-use anyhow::ensure;
-use tokio::sync::RwLock;
+use anyhow::{ensure, Context};
+use futures::{stream::FuturesUnordered, StreamExt};
+use tokio::{fs, sync::RwLock};
 use tracing::{debug, error, warn};
+use zenith_utils::zid::ZTenantId;
 
 use crate::{
     remote_storage::{
         storage_sync::{
             compression,
             index::{IndexEntry, RemoteTimeline},
-            sync_queue, update_index_description, SyncKind, SyncTask,
+            sync_queue, tenant_branch_files, update_index_description, SyncKind, SyncTask,
         },
         RemoteStorage, TimelineSyncId,
     },
@@ -19,7 +21,7 @@ use crate::{
 use super::{compression::ArchiveHeader, index::RemoteTimelineIndex, NewCheckpoint};
 
 pub(super) async fn upload_timeline_checkpoint<
-    P: Send + Sync + 'static,
+    P: std::fmt::Debug + Send + Sync + 'static,
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     config: &'static PageServerConf,
@@ -29,6 +31,18 @@ pub(super) async fn upload_timeline_checkpoint<
     retries: u32,
 ) -> Option<bool> {
     debug!("Uploading checkpoint for sync id {}", sync_id);
+    if let Err(e) = upload_missing_branches(config, remote_assets.as_ref(), sync_id.0).await {
+        error!(
+            "Failed to upload missing branches for sync id {}: {:#}",
+            sync_id, e
+        );
+        sync_queue::push(SyncTask::new(
+            sync_id,
+            retries,
+            SyncKind::Upload(new_checkpoint),
+        ));
+        return Some(false);
+    }
     let new_upload_lsn = new_checkpoint.metadata.disk_consistent_lsn();
 
     let index = &remote_assets.1;
@@ -169,8 +183,78 @@ async fn try_upload_checkpoint<
     .map(|(header, header_size, _)| (header, header_size))
 }
 
+async fn upload_missing_branches<
+    P: std::fmt::Debug + Send + Sync + 'static,
+    S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
+>(
+    config: &'static PageServerConf,
+    (storage, index): &(S, RwLock<RemoteTimelineIndex>),
+    tenant_id: ZTenantId,
+) -> anyhow::Result<()> {
+    let local_branches = tenant_branch_files(config, tenant_id)
+        .await
+        .context("Failed to list local branch files for the tenant")?;
+    let index_read = index.read().await;
+    let remote_branches = index_read
+        .branch_files(tenant_id)
+        .cloned()
+        .unwrap_or_default();
+    drop(index_read);
+    let mut branch_uploads = local_branches
+        .difference(&remote_branches)
+        .map(|local_only_branch| async move {
+            let storage_path = storage.storage_path(local_only_branch).with_context(|| {
+                format!(
+                    "Failed to derive a storage path for branch with local path '{}'",
+                    local_only_branch.display()
+                )
+            })?;
+            let local_branch_file = fs::OpenOptions::new()
+                .read(true)
+                .open(local_only_branch)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to open local branch file {} for reading",
+                        local_only_branch.display()
+                    )
+                })?;
+            storage
+                .upload(local_branch_file, &storage_path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to upload branch file to the remote path {:?}",
+                        storage_path
+                    )
+                })?;
+            Ok::<_, anyhow::Error>(local_only_branch)
+        })
+        .collect::<FuturesUnordered<_>>();
+
+    let mut branch_uploads_failed = false;
+    while let Some(upload_reuslt) = branch_uploads.next().await {
+        match upload_reuslt {
+            Ok(local_only_branch) => index
+                .write()
+                .await
+                .add_branch_file(tenant_id, local_only_branch.clone()),
+            Err(e) => {
+                error!("Failed to upload branch file: {:#}", e);
+                branch_uploads_failed = true;
+            }
+        }
+    }
+
+    ensure!(!branch_uploads_failed, "Failed to upload all branch files");
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use tempfile::tempdir;
     use zenith_utils::lsn::Lsn;
 
@@ -197,6 +281,7 @@ mod tests {
         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
         let storage = LocalFs::new(tempdir()?.path().to_owned(), &repo_harness.conf.workdir)?;
         let index = RwLock::new(RemoteTimelineIndex::new(
+            HashMap::new(),
             collect_timeline_descriptions(&storage).await.unwrap(),
         ));
         let remote_assets = Arc::new((storage, index));
@@ -388,6 +473,7 @@ mod tests {
         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
         let storage = LocalFs::new(tempdir()?.path().to_owned(), &repo_harness.conf.workdir)?;
         let index = RwLock::new(RemoteTimelineIndex::new(
+            HashMap::new(),
             collect_timeline_descriptions(&storage).await.unwrap(),
         ));
         let remote_assets = Arc::new((storage, index));

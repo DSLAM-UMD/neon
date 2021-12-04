@@ -1,14 +1,16 @@
 use std::{borrow::Cow, collections::HashSet, path::PathBuf, sync::Arc};
 
-use anyhow::{anyhow, Context};
-use tokio::sync::RwLock;
+use anyhow::{anyhow, ensure, Context};
+use futures::{stream::FuturesUnordered, StreamExt};
+use tokio::{fs, sync::RwLock};
 use tracing::{debug, error};
+use zenith_utils::zid::ZTenantId;
 
 use crate::{
     remote_storage::{
         storage_sync::{
-            compression, index::IndexEntry, sync_queue, update_index_description, SyncKind,
-            SyncTask,
+            compression, index::IndexEntry, sync_queue, tenant_branch_files,
+            update_index_description, SyncKind, SyncTask,
         },
         RemoteStorage, TimelineSyncId,
     },
@@ -21,7 +23,7 @@ use super::{
 };
 
 pub(super) async fn download_timeline<
-    P: Send + Sync + 'static,
+    P: std::fmt::Debug + Send + Sync + 'static,
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     config: &'static PageServerConf,
@@ -31,6 +33,18 @@ pub(super) async fn download_timeline<
     retries: u32,
 ) -> Option<bool> {
     debug!("Downloading layers for sync id {}", sync_id);
+    if let Err(e) = download_missing_branches(config, remote_assets.as_ref(), sync_id.0).await {
+        error!(
+            "Failed to download missing branches for sync id {}: {:#}",
+            sync_id, e
+        );
+        sync_queue::push(SyncTask::new(
+            sync_id,
+            retries,
+            SyncKind::Download(download),
+        ));
+        return Some(false);
+    }
 
     let index_read = remote_assets.1.read().await;
     let remote_timeline = match index_read.entry(&sync_id) {
@@ -143,9 +157,70 @@ async fn try_download_archive<
     Ok(())
 }
 
+async fn download_missing_branches<
+    P: std::fmt::Debug + Send + Sync + 'static,
+    S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
+>(
+    config: &'static PageServerConf,
+    (storage, index): &(S, RwLock<RemoteTimelineIndex>),
+    tenant_id: ZTenantId,
+) -> anyhow::Result<()> {
+    let local_branches = tenant_branch_files(config, tenant_id)
+        .await
+        .context("Failed to list local branch files for the tenant")?;
+    if let Some(remote_branches) = index.read().await.branch_files(tenant_id) {
+        let mut remote_only_branches_downloads = remote_branches
+            .difference(&local_branches)
+            .map(|remote_only_branch| async move {
+                let storage_path = storage.storage_path(remote_only_branch).with_context(|| {
+                    format!(
+                        "Failed to derive a storage path for branch with local path '{}'",
+                        remote_only_branch.display()
+                    )
+                })?;
+                let mut target_file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(remote_only_branch)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to create local branch file at '{}'",
+                            remote_only_branch.display()
+                        )
+                    })?;
+                storage
+                    .download(&storage_path, &mut target_file)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to download branch file from the remote path {:?}",
+                            storage_path
+                        )
+                    })?;
+                Ok::<_, anyhow::Error>(())
+            })
+            .collect::<FuturesUnordered<_>>();
+
+        let mut branch_downloads_failed = false;
+        while let Some(download_result) = remote_only_branches_downloads.next().await {
+            if let Err(e) = download_result {
+                branch_downloads_failed = true;
+                error!("Failed to download a branch file: {:#}", e);
+            }
+        }
+        ensure!(
+            !branch_downloads_failed,
+            "Failed to download all branch files"
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeSet, HashMap};
 
     use tempfile::tempdir;
     use tokio::fs;
@@ -173,6 +248,7 @@ mod tests {
         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
         let storage = LocalFs::new(tempdir()?.path().to_owned(), &repo_harness.conf.workdir)?;
         let index = RwLock::new(RemoteTimelineIndex::new(
+            HashMap::new(),
             collect_timeline_descriptions(&storage).await.unwrap(),
         ));
         let remote_assets = Arc::new((storage, index));
