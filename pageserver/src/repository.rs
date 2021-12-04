@@ -274,6 +274,7 @@ pub mod repo_harness {
 
             let tenant_id = ZTenantId::generate();
             fs::create_dir_all(conf.tenant_path(&tenant_id))?;
+            fs::create_dir_all(conf.branches_path(&tenant_id))?;
 
             Ok(Self { conf, tenant_id })
         }

@@ -67,7 +67,7 @@ use std::{
 use anyhow::{bail, Context};
 use futures::stream::{FuturesUnordered, StreamExt};
 use lazy_static::lazy_static;
-use tokio::sync::RwLock;
+use tokio::{fs, sync::RwLock};
 use tokio::{
     sync::mpsc::{self, UnboundedReceiver},
     time::Instant,
@@ -290,7 +290,7 @@ pub(super) fn spawn_storage_sync_thread<
     P: std::fmt::Debug + Send + Sync + 'static,
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
-    config: &'static PageServerConf,
+    conf: &'static PageServerConf,
     local_timeline_files: HashMap<TimelineSyncId, (TimelineMetadata, Vec<PathBuf>)>,
     remote_storage: S,
     max_concurrent_sync: NonZeroUsize,
@@ -304,11 +304,9 @@ pub(super) fn spawn_storage_sync_thread<
         .build()
         .context("Failed to create storage sync runtime")?;
 
-    let remote_index = RemoteTimelineIndex::new(runtime
-        .block_on(collect_timeline_descriptions(&remote_storage))
-        .context(
-            "Failed to list remote storage contents and collect the timeline archive description",
-        )?);
+    let remote_index = runtime
+        .block_on(init_remote_timeline_index(conf, &remote_storage))
+        .context("Failed to create remote timeline index")?;
 
     let initial_timeline_states = schedule_first_sync_tasks(&remote_index, local_timeline_files);
 
@@ -317,7 +315,7 @@ pub(super) fn spawn_storage_sync_thread<
         .spawn(move || {
             storage_sync_loop(
                 runtime,
-                config,
+                conf,
                 receiver,
                 remote_index,
                 remote_storage,
@@ -330,6 +328,38 @@ pub(super) fn spawn_storage_sync_thread<
         initial_timeline_states,
         sync_loop_handle: Some(handle),
     })
+}
+
+async fn init_remote_timeline_index<
+    P: std::fmt::Debug + Send + Sync + 'static,
+    S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
+>(
+    conf: &'static PageServerConf,
+    remote_storage: &S,
+) -> anyhow::Result<RemoteTimelineIndex> {
+    let descriptions = collect_timeline_descriptions(remote_storage)
+        .await
+        .context(
+            "Failed to list remote storage contents and collect the timeline archive descriptions",
+        )?;
+
+    let mut branch_files_futures = descriptions
+        .keys()
+        .map(|&TimelineSyncId(tenant_id, _)| async move {
+            (tenant_id, tenant_branch_files(conf, tenant_id).await)
+        })
+        .collect::<FuturesUnordered<_>>();
+
+    let mut branch_files = HashMap::with_capacity(branch_files_futures.len());
+    while let Some((tenant_id, tenant_branches)) = branch_files_futures.next().await {
+        match tenant_branches {
+            Ok(tenant_branches) => {
+                branch_files.insert(tenant_id, tenant_branches);
+            }
+            Err(e) => error!("Failed to list tenant {} branches: {:#}", tenant_id, e),
+        }
+    }
+    Ok(RemoteTimelineIndex::new(branch_files, descriptions))
 }
 
 async fn collect_timeline_descriptions<
@@ -367,7 +397,7 @@ fn storage_sync_loop<
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     runtime: tokio::runtime::Runtime,
-    config: &'static PageServerConf,
+    conf: &'static PageServerConf,
     mut receiver: UnboundedReceiver<SyncTask>,
     index: RemoteTimelineIndex,
     remote_storage: S,
@@ -377,14 +407,14 @@ fn storage_sync_loop<
     let remote_assets = Arc::new((remote_storage, RwLock::new(index)));
     while !crate::tenant_mgr::shutdown_requested() {
         let new_timeline_states = runtime.block_on(loop_step(
-            config,
+            conf,
             &mut receiver,
             Arc::clone(&remote_assets),
             max_concurrent_sync,
             max_sync_errors,
         ));
         // Batch timeline download registration to ensure that the external registration code won't block any running tasks before.
-        set_timeline_states(config, new_timeline_states);
+        set_timeline_states(conf, new_timeline_states);
     }
 
     debug!("Shutdown requested, stopping");
@@ -395,7 +425,7 @@ async fn loop_step<
     P: std::fmt::Debug + Send + Sync + 'static,
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
-    config: &'static PageServerConf,
+    conf: &'static PageServerConf,
     receiver: &mut UnboundedReceiver<SyncTask>,
     remote_assets: Arc<(S, RwLock<RemoteTimelineIndex>)>,
     max_concurrent_sync: NonZeroUsize,
@@ -430,7 +460,7 @@ async fn loop_step<
         .map(|task| async {
             let sync_id = task.sync_id;
             let extra_step = match tokio::spawn(process_task(
-                config,
+                conf,
                 Arc::clone(&remote_assets),
                 task,
                 max_sync_errors,
@@ -470,7 +500,7 @@ async fn process_task<
     P: std::fmt::Debug + Send + Sync + 'static,
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
-    config: &'static PageServerConf,
+    conf: &'static PageServerConf,
     remote_assets: Arc<(S, RwLock<RemoteTimelineIndex>)>,
     task: SyncTask,
     max_sync_errors: NonZeroU32,
@@ -496,7 +526,7 @@ async fn process_task<
     match task.kind {
         SyncKind::Download(download_data) => {
             let sync_status = download_timeline(
-                config,
+                conf,
                 remote_assets,
                 task.sync_id,
                 download_data,
@@ -508,7 +538,7 @@ async fn process_task<
         }
         SyncKind::Upload(layer_upload) => {
             let sync_status = upload_timeline_checkpoint(
-                config,
+                conf,
                 remote_assets,
                 task.sync_id,
                 layer_upload,
@@ -699,6 +729,24 @@ async fn download_archive_header<
     let header_buf = header_buf.into_inner();
     let header = read_archive_header(&description.archive_name, &mut header_buf.as_slice()).await?;
     Ok(header)
+}
+
+async fn tenant_branch_files(
+    conf: &'static PageServerConf,
+    tenant_id: ZTenantId,
+) -> anyhow::Result<HashSet<PathBuf>> {
+    let branches_dir = conf.branches_path(&tenant_id);
+    let mut branch_entries = fs::read_dir(&branches_dir)
+        .await
+        .context("Failed to list tenant branches dir contents")?;
+
+    let mut branch_files = HashSet::new();
+    while let Some(branch_entry) = branch_entries.next_entry().await? {
+        if branch_entry.file_type().await?.is_file() {
+            branch_files.insert(branch_entry.path());
+        }
+    }
+    Ok(branch_files)
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 //! This way in the future, the index could be restored fast from its serialized stored form.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -27,15 +27,21 @@ use super::compression::ArchiveHeader;
 
 #[derive(Debug)]
 pub struct RemoteTimelineIndex {
-    index: HashMap<TimelineSyncId, IndexEntry>,
+    branch_files: HashMap<ZTenantId, HashSet<PathBuf>>,
+    timeline_files: HashMap<TimelineSyncId, IndexEntry>,
 }
 
 impl RemoteTimelineIndex {
     pub fn new(
+        // TODO kb this is a part of the index, but it's not portable:
+        // other machine with different working directory may deserialize this file
+        // TODO kb merge both fields, split `TimelineSyncId` key?
+        branch_files: HashMap<ZTenantId, HashSet<PathBuf>>,
         descriptions: HashMap<TimelineSyncId, BTreeMap<ArchiveId, ArchiveDescription>>,
     ) -> Self {
         Self {
-            index: descriptions
+            branch_files,
+            timeline_files: descriptions
                 .into_iter()
                 .map(|(sync_id, descriptions)| (sync_id, IndexEntry::Description(descriptions)))
                 .collect(),
@@ -43,19 +49,30 @@ impl RemoteTimelineIndex {
     }
 
     pub fn entry(&self, id: &TimelineSyncId) -> Option<&IndexEntry> {
-        self.index.get(id)
+        self.timeline_files.get(id)
     }
 
     pub fn entry_mut(&mut self, id: &TimelineSyncId) -> Option<&mut IndexEntry> {
-        self.index.get_mut(id)
+        self.timeline_files.get_mut(id)
     }
 
     pub fn set_entry(&mut self, id: TimelineSyncId, entry: IndexEntry) {
-        self.index.insert(id, entry);
+        self.timeline_files.insert(id, entry);
     }
 
     pub fn all_ids(&self) -> impl Iterator<Item = TimelineSyncId> + '_ {
-        self.index.keys().copied()
+        self.timeline_files.keys().copied()
+    }
+
+    pub fn add_branch_file(&mut self, tenant_id: ZTenantId, path: PathBuf) {
+        self.branch_files
+            .entry(tenant_id)
+            .or_insert_with(HashSet::new)
+            .insert(path);
+    }
+
+    pub fn branch_files(&self, tenant_id: ZTenantId) -> Option<&HashSet<PathBuf>> {
+        self.branch_files.get(&tenant_id)
     }
 }
 
@@ -213,6 +230,8 @@ pub struct ArchiveDescription {
     pub header_size: u64,
     pub disk_consistent_lsn: Lsn,
     pub archive_name: String,
+    // TODO kb this is a part of the index, but it's not portable:
+    // other machine with different working directory may deserialize this file
     pub download_path: PathBuf,
 }
 

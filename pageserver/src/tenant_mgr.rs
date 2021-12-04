@@ -12,9 +12,9 @@ use lazy_static::lazy_static;
 use log::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{hash_map, HashMap};
+use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::{fmt, fs};
 use zenith_utils::zid::{ZTenantId, ZTimelineId};
 
 lazy_static! {
@@ -117,16 +117,6 @@ fn put_timelines_into_tenant(
                     timeline_id, timeline_state
                 )
             })?;
-
-        if matches!(timeline_state, TimelineState::Ready) {
-            for missing_path in [conf.branches_path(&tenant_id), conf.tags_path(&tenant_id)] {
-                if !missing_path.exists() {
-                    fs::create_dir_all(&missing_path)
-                        .context("Failed to create missing timeline dirs locally")?;
-                }
-            }
-            info!("Successfully initialized timeline {}", timeline_id);
-        }
     }
 
     Ok(())
