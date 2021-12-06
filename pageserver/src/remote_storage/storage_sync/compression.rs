@@ -276,7 +276,7 @@ async fn uncompress_with_header(
     for entry in header.files {
         uncompress_entry(
             &mut archive,
-            &entry.subpath.as_path(&destination_dir),
+            &entry.subpath.as_path(destination_dir),
             entry.size,
             files_to_skip,
         )

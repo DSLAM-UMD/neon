@@ -9,7 +9,7 @@ use zenith_utils::zid::ZTenantId;
 use crate::{
     remote_storage::{
         storage_sync::{
-            compression, index::IndexEntry, sync_queue, tenant_branch_files,
+            compression, index::TimelineIndexEntry, sync_queue, tenant_branch_files,
             update_index_description, SyncKind, SyncTask,
         },
         RemoteStorage, TimelineSyncId,
@@ -49,13 +49,13 @@ pub(super) async fn download_timeline<
     let TimelineSyncId(tenant_id, timeline_id) = sync_id;
 
     let index_read = remote_assets.1.read().await;
-    let remote_timeline = match index_read.entry(&sync_id) {
+    let remote_timeline = match index_read.timeline_entry(&sync_id) {
         None => {
             error!("Cannot download: no timeline is present in the index for given ids");
             return None;
         }
-        Some(IndexEntry::Full(remote_timeline)) => Cow::Borrowed(remote_timeline),
-        Some(IndexEntry::Description(_)) => {
+        Some(TimelineIndexEntry::Full(remote_timeline)) => Cow::Borrowed(remote_timeline),
+        Some(TimelineIndexEntry::Description(_)) => {
             drop(index_read);
             debug!("Found timeline description for the given ids, downloading the full index");
             match update_index_description(
@@ -230,7 +230,7 @@ async fn download_missing_branches<
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeSet, HashMap};
+    use std::collections::BTreeSet;
 
     use tempfile::tempdir;
     use tokio::fs;
@@ -239,12 +239,9 @@ mod tests {
     use crate::{
         remote_storage::{
             local_fs::LocalFs,
-            storage_sync::{
-                collect_timeline_descriptions,
-                test_utils::{
-                    assert_index_descriptions, assert_timeline_files_match, create_local_timeline,
-                    dummy_metadata, ensure_correct_timeline_upload, expect_timeline,
-                },
+            storage_sync::test_utils::{
+                assert_index_descriptions, assert_timeline_files_match, create_local_timeline,
+                dummy_metadata, ensure_correct_timeline_upload, expect_timeline,
             },
         },
         repository::repo_harness::{RepoHarness, TIMELINE_ID},
@@ -257,9 +254,13 @@ mod tests {
         let repo_harness = RepoHarness::create("test_download_timeline")?;
         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
         let storage = LocalFs::new(tempdir()?.path().to_owned(), &repo_harness.conf.workdir)?;
-        let index = RwLock::new(RemoteTimelineIndex::new(
-            HashMap::new(),
-            collect_timeline_descriptions(&storage).await.unwrap(),
+        let index = RwLock::new(RemoteTimelineIndex::try_parse_descriptions_from_paths(
+            repo_harness.conf,
+            storage
+                .list()
+                .await?
+                .into_iter()
+                .map(|storage_path| storage.local_path(&storage_path).unwrap()),
         ));
         let remote_assets = Arc::new((storage, index));
         let storage = &remote_assets.0;
@@ -293,8 +294,20 @@ mod tests {
             0,
         )
         .await;
-        assert_index_descriptions(index, collect_timeline_descriptions(storage).await.unwrap())
-            .await;
+        assert_index_descriptions(
+            index,
+            RemoteTimelineIndex::try_parse_descriptions_from_paths(
+                repo_harness.conf,
+                remote_assets
+                    .0
+                    .list()
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|storage_path| storage.local_path(&storage_path).unwrap()),
+            ),
+        )
+        .await;
         assert_timeline_files_match(&repo_harness, TIMELINE_ID, remote_regular_timeline);
 
         Ok(())

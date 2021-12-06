@@ -118,7 +118,6 @@ lazy_static! {
 }
 
 /// Parts of the `.zenith/tenants/<tenantid>/timelines/<timelineid>` directory prefix.
-pub const TENANTS_SEGMENT_NAME: &str = "tenants";
 pub const TIMELINES_SEGMENT_NAME: &str = "timelines";
 
 ///

@@ -10,7 +10,7 @@ use crate::{
     remote_storage::{
         storage_sync::{
             compression,
-            index::{IndexEntry, RemoteTimeline},
+            index::{RemoteTimeline, TimelineIndexEntry},
             sync_queue, tenant_branch_files, update_index_description, SyncKind, SyncTask,
         },
         RemoteStorage, TimelineSyncId,
@@ -51,10 +51,10 @@ pub(super) async fn upload_timeline_checkpoint<
     let timeline_dir = config.timeline_path(&timeline_id, &tenant_id);
 
     let index_read = index.read().await;
-    let remote_timeline = match index_read.entry(&sync_id) {
+    let remote_timeline = match index_read.timeline_entry(&sync_id) {
         None => None,
-        Some(IndexEntry::Full(remote_timeline)) => Some(Cow::Borrowed(remote_timeline)),
-        Some(IndexEntry::Description(_)) => {
+        Some(TimelineIndexEntry::Full(remote_timeline)) => Some(Cow::Borrowed(remote_timeline)),
+        Some(TimelineIndexEntry::Description(_)) => {
             debug!("Found timeline description for the given ids, downloading the full index");
             match update_index_description(remote_assets.as_ref(), &timeline_dir, sync_id).await {
                 Ok(remote_timeline) => Some(Cow::Owned(remote_timeline)),
@@ -99,22 +99,22 @@ pub(super) async fn upload_timeline_checkpoint<
     {
         Ok((archive_header, header_size)) => {
             let mut index_write = index.write().await;
-            match index_write.entry_mut(&sync_id) {
-                Some(IndexEntry::Full(remote_timeline)) => {
+            match index_write.timeline_entry_mut(&sync_id) {
+                Some(TimelineIndexEntry::Full(remote_timeline)) => {
                     remote_timeline.update_archive_contents(
                         new_checkpoint.metadata.disk_consistent_lsn(),
                         archive_header,
                         header_size,
                     );
                 }
-                None | Some(IndexEntry::Description(_)) => {
+                None | Some(TimelineIndexEntry::Description(_)) => {
                     let mut new_timeline = RemoteTimeline::empty();
                     new_timeline.update_archive_contents(
                         new_checkpoint.metadata.disk_consistent_lsn(),
                         archive_header,
                         header_size,
                     );
-                    index_write.set_entry(sync_id, IndexEntry::Full(new_timeline));
+                    index_write.add_timeline_entry(sync_id, TimelineIndexEntry::Full(new_timeline));
                 }
             }
             debug!("Checkpoint uploaded successfully");
@@ -256,8 +256,6 @@ async fn upload_missing_branches<
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use tempfile::tempdir;
     use zenith_utils::lsn::Lsn;
 
@@ -265,7 +263,6 @@ mod tests {
         remote_storage::{
             local_fs::LocalFs,
             storage_sync::{
-                collect_timeline_descriptions,
                 index::ArchiveId,
                 test_utils::{
                     assert_index_descriptions, create_local_timeline, dummy_metadata,
@@ -283,9 +280,13 @@ mod tests {
         let repo_harness = RepoHarness::create("reupload_timeline")?;
         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
         let storage = LocalFs::new(tempdir()?.path().to_owned(), &repo_harness.conf.workdir)?;
-        let index = RwLock::new(RemoteTimelineIndex::new(
-            HashMap::new(),
-            collect_timeline_descriptions(&storage).await.unwrap(),
+        let index = RwLock::new(RemoteTimelineIndex::try_parse_descriptions_from_paths(
+            repo_harness.conf,
+            storage
+                .list()
+                .await?
+                .into_iter()
+                .map(|storage_path| storage.local_path(&storage_path).unwrap()),
         ));
         let remote_assets = Arc::new((storage, index));
         let index = &remote_assets.1;
@@ -475,9 +476,13 @@ mod tests {
         let repo_harness = RepoHarness::create("reupload_timeline_rejected")?;
         let sync_id = TimelineSyncId(repo_harness.tenant_id, TIMELINE_ID);
         let storage = LocalFs::new(tempdir()?.path().to_owned(), &repo_harness.conf.workdir)?;
-        let index = RwLock::new(RemoteTimelineIndex::new(
-            HashMap::new(),
-            collect_timeline_descriptions(&storage).await.unwrap(),
+        let index = RwLock::new(RemoteTimelineIndex::try_parse_descriptions_from_paths(
+            repo_harness.conf,
+            storage
+                .list()
+                .await?
+                .into_iter()
+                .map(|storage_path| storage.local_path(&storage_path).unwrap()),
         ));
         let remote_assets = Arc::new((storage, index));
         let storage = &remote_assets.0;
@@ -497,7 +502,16 @@ mod tests {
             first_checkpoint,
         )
         .await;
-        let after_first_uploads = collect_timeline_descriptions(storage).await.unwrap();
+        let after_first_uploads = RemoteTimelineIndex::try_parse_descriptions_from_paths(
+            repo_harness.conf,
+            remote_assets
+                .0
+                .list()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|storage_path| storage.local_path(&storage_path).unwrap()),
+        );
 
         let normal_upload_metadata = dummy_metadata(Lsn(0x20));
         assert_ne!(

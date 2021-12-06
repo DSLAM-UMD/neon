@@ -57,7 +57,7 @@ pub mod index;
 mod upload;
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     sync::Arc,
@@ -77,16 +77,17 @@ use tracing::*;
 use self::{
     compression::ArchiveHeader,
     download::download_timeline,
-    index::{ArchiveDescription, ArchiveId, RelativePath, RemoteTimeline, RemoteTimelineIndex},
+    index::{
+        ArchiveDescription, ArchiveId, RelativePath, RemoteTimeline, RemoteTimelineIndex,
+        TimelineIndexEntry,
+    },
     upload::upload_timeline_checkpoint,
 };
 use super::{RemoteStorage, SyncStartupData, TimelineSyncId};
 use crate::{
     layered_repository::metadata::TimelineMetadata,
-    remote_storage::storage_sync::{compression::read_archive_header, index::IndexEntry},
-    repository::TimelineState,
-    tenant_mgr::set_timeline_states,
-    PageServerConf,
+    remote_storage::storage_sync::compression::read_archive_header, repository::TimelineState,
+    tenant_mgr::set_timeline_states, PageServerConf,
 };
 
 use zenith_metrics::{register_histogram_vec, register_int_gauge, HistogramVec, IntGauge};
@@ -292,7 +293,7 @@ pub(super) fn spawn_storage_sync_thread<
 >(
     conf: &'static PageServerConf,
     local_timeline_files: HashMap<TimelineSyncId, (TimelineMetadata, Vec<PathBuf>)>,
-    remote_storage: S,
+    storage: S,
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
 ) -> anyhow::Result<SyncStartupData> {
@@ -304,9 +305,22 @@ pub(super) fn spawn_storage_sync_thread<
         .build()
         .context("Failed to create storage sync runtime")?;
 
-    let remote_index = runtime
-        .block_on(init_remote_timeline_index(conf, &remote_storage))
-        .context("Failed to create remote timeline index")?;
+    let download_paths = runtime
+        // TODO could take long time, consider [de]serializing [`RemoteTimelineIndex`] instead
+        .block_on(storage.list())
+        .context("Failed to list remote storage files")?
+        .into_iter()
+        .filter_map(|remote_path| match storage.local_path(&remote_path) {
+            Ok(local_path) => Some(local_path),
+            Err(e) => {
+                error!(
+                    "Failed to find local path for remote path {:?}: {:#}",
+                    remote_path, e
+                );
+                None
+            }
+        });
+    let remote_index = RemoteTimelineIndex::try_parse_descriptions_from_paths(conf, download_paths);
 
     let initial_timeline_states = schedule_first_sync_tasks(&remote_index, local_timeline_files);
 
@@ -318,7 +332,7 @@ pub(super) fn spawn_storage_sync_thread<
                 conf,
                 receiver,
                 remote_index,
-                remote_storage,
+                storage,
                 max_concurrent_sync,
                 max_sync_errors,
             )
@@ -330,69 +344,6 @@ pub(super) fn spawn_storage_sync_thread<
     })
 }
 
-async fn init_remote_timeline_index<
-    P: std::fmt::Debug + Send + Sync + 'static,
-    S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
->(
-    conf: &'static PageServerConf,
-    remote_storage: &S,
-) -> anyhow::Result<RemoteTimelineIndex> {
-    let descriptions = collect_timeline_descriptions(remote_storage)
-        .await
-        .context(
-            "Failed to list remote storage contents and collect the timeline archive descriptions",
-        )?;
-
-    let mut branch_files_futures = descriptions
-        .keys()
-        .map(|&TimelineSyncId(tenant_id, _)| async move {
-            (tenant_id, tenant_branch_files(conf, tenant_id).await)
-        })
-        .collect::<FuturesUnordered<_>>();
-
-    let mut branch_files = HashMap::with_capacity(branch_files_futures.len());
-    while let Some((tenant_id, tenant_branches)) = branch_files_futures.next().await {
-        match tenant_branches {
-            Ok(tenant_branches) => {
-                branch_files.insert(tenant_id, tenant_branches);
-            }
-            Err(e) => error!("Failed to list tenant {} branches: {:#}", tenant_id, e),
-        }
-    }
-    Ok(RemoteTimelineIndex::new(branch_files, descriptions))
-}
-
-async fn collect_timeline_descriptions<
-    P: std::fmt::Debug + Send + Sync + 'static,
-    S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
->(
-    storage: &S,
-) -> anyhow::Result<HashMap<TimelineSyncId, BTreeMap<ArchiveId, ArchiveDescription>>> {
-    let mut description = HashMap::<TimelineSyncId, BTreeMap<ArchiveId, ArchiveDescription>>::new();
-    for (local_path, remote_path) in storage
-        .list()
-        .await
-        .context("Failed to list remote storage files")?
-        .into_iter()
-        .map(|remote_path| (storage.local_path(&remote_path), remote_path))
-    {
-        // TODO kb this is not always right now, with branches uploaded
-        match local_path.and_then(index::parse_archive_description) {
-            Ok((sync_id, archive_id, archive_description)) => {
-                description
-                    .entry(sync_id)
-                    .or_default()
-                    .insert(archive_id, archive_description);
-            }
-            Err(e) => error!(
-                "Failed to parse archive description from path '{:?}', reason: {:#}",
-                remote_path, e
-            ),
-        }
-    }
-    Ok(description)
-}
-
 fn storage_sync_loop<
     P: std::fmt::Debug + Send + Sync + 'static,
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
@@ -401,11 +352,11 @@ fn storage_sync_loop<
     conf: &'static PageServerConf,
     mut receiver: UnboundedReceiver<SyncTask>,
     index: RemoteTimelineIndex,
-    remote_storage: S,
+    storage: S,
     max_concurrent_sync: NonZeroUsize,
     max_sync_errors: NonZeroU32,
 ) -> anyhow::Result<()> {
-    let remote_assets = Arc::new((remote_storage, RwLock::new(index)));
+    let remote_assets = Arc::new((storage, RwLock::new(index)));
     while !crate::tenant_mgr::shutdown_requested() {
         let new_timeline_states = runtime.block_on(loop_step(
             conf,
@@ -564,7 +515,7 @@ fn schedule_first_sync_tasks(
 
     for (sync_id, (local_metadata, local_files)) in local_timeline_files {
         let TimelineSyncId(tenant_id, timeline_id) = sync_id;
-        match index.entry(&sync_id) {
+        match index.timeline_entry(&sync_id) {
             Some(index_entry) => {
                 let timeline_status = compare_local_and_remote_timeline(
                     &mut new_sync_tasks,
@@ -596,7 +547,7 @@ fn schedule_first_sync_tasks(
     }
 
     for TimelineSyncId(cloud_only_tenant_id, cloud_only_timeline_id) in index
-        .all_ids()
+        .all_sync_ids()
         .filter(|remote_id| {
             initial_timeline_statuses
                 .get(&remote_id.0)
@@ -622,7 +573,7 @@ fn compare_local_and_remote_timeline(
     sync_id: TimelineSyncId,
     local_metadata: TimelineMetadata,
     local_files: Vec<PathBuf>,
-    remote_entry: &IndexEntry,
+    remote_entry: &TimelineIndexEntry,
 ) -> TimelineState {
     let local_lsn = local_metadata.ancestor_lsn();
     let uploads = remote_entry.uploaded_checkpoints();
@@ -679,10 +630,10 @@ async fn update_index_description<
     id: TimelineSyncId,
 ) -> anyhow::Result<RemoteTimeline> {
     let mut index_write = index.write().await;
-    let full_index = match index_write.entry(&id) {
+    let full_index = match index_write.timeline_entry(&id) {
         None => bail!("Timeline not found for sync id {}", id),
-        Some(IndexEntry::Full(_)) => bail!("Index is already populated for sync id {}", id),
-        Some(IndexEntry::Description(description)) => {
+        Some(TimelineIndexEntry::Full(_)) => bail!("Index is already populated for sync id {}", id),
+        Some(TimelineIndexEntry::Description(description)) => {
             let mut archive_header_downloads = FuturesUnordered::new();
             for (&archive_id, description) in description {
                 archive_header_downloads.push(async move {
@@ -707,7 +658,7 @@ async fn update_index_description<
             full_index
         }
     };
-    index_write.set_entry(id, IndexEntry::Full(full_index.clone()));
+    index_write.add_timeline_entry(id, TimelineIndexEntry::Full(full_index.clone()));
     Ok(full_index)
 }
 
@@ -754,7 +705,10 @@ async fn tenant_branch_files(
 
 #[cfg(test)]
 mod test_utils {
-    use std::{collections::BTreeSet, fs};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        fs,
+    };
 
     use super::*;
     use crate::{
@@ -780,12 +734,19 @@ mod test_utils {
         )
         .await;
 
-        let index = &remote_assets.1;
+        let (storage, index) = remote_assets.as_ref();
         assert_index_descriptions(
             index,
-            collect_timeline_descriptions(&remote_assets.0)
-                .await
-                .unwrap(),
+            RemoteTimelineIndex::try_parse_descriptions_from_paths(
+                harness.conf,
+                remote_assets
+                    .0
+                    .list()
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|storage_path| storage.local_path(&storage_path).unwrap()),
+            ),
         )
         .await;
 
@@ -821,7 +782,9 @@ mod test_utils {
         index: &RwLock<RemoteTimelineIndex>,
         sync_id: TimelineSyncId,
     ) -> RemoteTimeline {
-        if let Some(IndexEntry::Full(remote_timeline)) = index.read().await.entry(&sync_id) {
+        if let Some(TimelineIndexEntry::Full(remote_timeline)) =
+            index.read().await.timeline_entry(&sync_id)
+        {
             remote_timeline.clone()
         } else {
             panic!(
@@ -834,29 +797,96 @@ mod test_utils {
     #[track_caller]
     pub async fn assert_index_descriptions(
         index: &RwLock<RemoteTimelineIndex>,
-        expected_descriptions: HashMap<TimelineSyncId, BTreeMap<ArchiveId, ArchiveDescription>>,
+        expected_index_with_descriptions: RemoteTimelineIndex,
     ) {
-        let actual_entries_count = index.read().await.all_ids().count();
-        assert_eq!(actual_entries_count, expected_descriptions.len());
+        let index_read = index.read().await;
+        let actual_sync_ids = index_read.all_sync_ids().collect::<BTreeSet<_>>();
+        let expected_sync_ids = expected_index_with_descriptions
+            .all_sync_ids()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual_sync_ids, expected_sync_ids,
+            "Index contains unexpected sync ids"
+        );
 
-        for (expected_sync_id, timeline_descriptions) in expected_descriptions {
-            let index_read = index.read().await;
-            let actual_timeline = index_read.entry(&expected_sync_id).unwrap_or_else(|| {
-                panic!(
-                    "Failed to find an expected timeline with id {} in the index",
-                    expected_sync_id
-                )
-            });
-            let expected_lsns = timeline_descriptions
-                .values()
-                .map(|description| description.disk_consistent_lsn)
-                .collect::<BTreeSet<_>>();
-            assert_eq!(
-                actual_timeline.uploaded_checkpoints(),
-                expected_lsns,
-                "Timline {} should have the same checkpoints uploaded",
-                expected_sync_id,
-            )
+        let mut actual_branches = BTreeMap::new();
+        let mut expected_branches = BTreeMap::new();
+        let mut actual_timeline_entries = BTreeMap::new();
+        let mut expected_timeline_entries = BTreeMap::new();
+        for sync_id in actual_sync_ids {
+            actual_branches.insert(
+                sync_id.1,
+                index_read
+                    .branch_files(sync_id.0)
+                    .into_iter()
+                    .flat_map(|branch_paths| branch_paths.iter())
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            );
+            expected_branches.insert(
+                sync_id.1,
+                expected_index_with_descriptions
+                    .branch_files(sync_id.0)
+                    .into_iter()
+                    .flat_map(|branch_paths| branch_paths.iter())
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            );
+
+            actual_timeline_entries.insert(
+                sync_id,
+                index_read.timeline_entry(&sync_id).unwrap().clone(),
+            );
+            expected_timeline_entries.insert(
+                sync_id,
+                expected_index_with_descriptions
+                    .timeline_entry(&sync_id)
+                    .unwrap()
+                    .clone(),
+            );
+        }
+        drop(index_read);
+
+        assert_eq!(
+            actual_branches, expected_branches,
+            "Index contains unexpected branches"
+        );
+
+        for (sync_id, actual_timeline_entry) in actual_timeline_entries {
+            let expected_timeline_description = expected_timeline_entries
+                .remove(&sync_id)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Failed to find an expected timeline with id {} in the index",
+                        sync_id
+                    )
+                });
+            let expected_timeline_description = match expected_timeline_description {
+                TimelineIndexEntry::Description(description) => description,
+                TimelineIndexEntry::Full(_) => panic!("Expected index entry for sync id {} is a full entry, while a description was expected", sync_id),
+            };
+
+            match actual_timeline_entry {
+                TimelineIndexEntry::Description(actual_descriptions) => {
+                    assert_eq!(
+                        actual_descriptions, expected_timeline_description,
+                        "Index contains unexpected descriptions entry for sync id {}",
+                        sync_id
+                    )
+                }
+                TimelineIndexEntry::Full(actual_full_entry) => {
+                    let expected_lsns = expected_timeline_description
+                        .values()
+                        .map(|description| description.disk_consistent_lsn)
+                        .collect::<BTreeSet<_>>();
+                    assert_eq!(
+                        actual_full_entry.checkpoints().collect::<BTreeSet<_>>(),
+                        expected_lsns,
+                        "Timline {} should have the same checkpoints uploaded",
+                        sync_id,
+                    )
+                }
+            }
         }
     }
 
