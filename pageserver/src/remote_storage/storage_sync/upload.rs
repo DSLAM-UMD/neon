@@ -47,13 +47,16 @@ pub(super) async fn upload_timeline_checkpoint<
 
     let index = &remote_assets.1;
 
+    let TimelineSyncId(tenant_id, timeline_id) = sync_id;
+    let timeline_dir = config.timeline_path(&timeline_id, &tenant_id);
+
     let index_read = index.read().await;
     let remote_timeline = match index_read.entry(&sync_id) {
         None => None,
         Some(IndexEntry::Full(remote_timeline)) => Some(Cow::Borrowed(remote_timeline)),
         Some(IndexEntry::Description(_)) => {
             debug!("Found timeline description for the given ids, downloading the full index");
-            match update_index_description(remote_assets.as_ref(), sync_id).await {
+            match update_index_description(remote_assets.as_ref(), &timeline_dir, sync_id).await {
                 Ok(remote_timeline) => Some(Cow::Owned(remote_timeline)),
                 Err(e) => {
                     error!("Failed to download full timeline index: {:#}", e);
@@ -80,8 +83,6 @@ pub(super) async fn upload_timeline_checkpoint<
         return None;
     }
 
-    let TimelineSyncId(tenant_id, timeline_id) = sync_id;
-    let timeline_dir = config.timeline_path(&timeline_id, &tenant_id);
     let already_uploaded_files = remote_timeline
         .map(|timeline| timeline.stored_files(&timeline_dir))
         .unwrap_or_default();
@@ -200,23 +201,25 @@ async fn upload_missing_branches<
         .cloned()
         .unwrap_or_default();
     drop(index_read);
+
     let mut branch_uploads = local_branches
         .difference(&remote_branches)
         .map(|local_only_branch| async move {
-            let storage_path = storage.storage_path(local_only_branch).with_context(|| {
+            let local_branch_path = local_only_branch.as_path(&config.branches_path(&tenant_id));
+            let storage_path = storage.storage_path(&local_branch_path).with_context(|| {
                 format!(
                     "Failed to derive a storage path for branch with local path '{}'",
-                    local_only_branch.display()
+                    local_branch_path.display()
                 )
             })?;
             let local_branch_file = fs::OpenOptions::new()
                 .read(true)
-                .open(local_only_branch)
+                .open(&local_branch_path)
                 .await
                 .with_context(|| {
                     format!(
                         "Failed to open local branch file {} for reading",
-                        local_only_branch.display()
+                        local_branch_path.display()
                     )
                 })?;
             storage

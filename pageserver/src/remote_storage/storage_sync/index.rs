@@ -10,6 +10,7 @@ use std::{
 };
 
 use anyhow::{anyhow, ensure, Context};
+use serde::{Deserialize, Serialize};
 use zenith_utils::{
     lsn::Lsn,
     zid::{ZTenantId, ZTimelineId},
@@ -25,18 +26,32 @@ use crate::{
 
 use super::compression::ArchiveHeader;
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct RelativePath(String);
+
+impl RelativePath {
+    pub fn new<P: AsRef<Path>>(base: &Path, path: P) -> anyhow::Result<Self> {
+        let relative = base
+            .strip_prefix(path)
+            .context("path is not relative to base")?;
+        Ok(RelativePath(relative.to_string_lossy().to_string()))
+    }
+
+    pub fn as_path(&self, base: &Path) -> PathBuf {
+        base.join(&self.0)
+    }
+}
+
 #[derive(Debug)]
 pub struct RemoteTimelineIndex {
-    branch_files: HashMap<ZTenantId, HashSet<PathBuf>>,
+    branch_files: HashMap<ZTenantId, HashSet<RelativePath>>,
     timeline_files: HashMap<TimelineSyncId, IndexEntry>,
 }
 
 impl RemoteTimelineIndex {
     pub fn new(
-        // TODO kb this is a part of the index, but it's not portable:
-        // other machine with different working directory may deserialize this file
         // TODO kb merge both fields, split `TimelineSyncId` key?
-        branch_files: HashMap<ZTenantId, HashSet<PathBuf>>,
+        branch_files: HashMap<ZTenantId, HashSet<RelativePath>>,
         descriptions: HashMap<TimelineSyncId, BTreeMap<ArchiveId, ArchiveDescription>>,
     ) -> Self {
         Self {
@@ -64,14 +79,14 @@ impl RemoteTimelineIndex {
         self.timeline_files.keys().copied()
     }
 
-    pub fn add_branch_file(&mut self, tenant_id: ZTenantId, path: PathBuf) {
+    pub fn add_branch_file(&mut self, tenant_id: ZTenantId, path: RelativePath) {
         self.branch_files
             .entry(tenant_id)
             .or_insert_with(HashSet::new)
             .insert(path);
     }
 
-    pub fn branch_files(&self, tenant_id: ZTenantId) -> Option<&HashSet<PathBuf>> {
+    pub fn branch_files(&self, tenant_id: ZTenantId) -> Option<&HashSet<RelativePath>> {
         self.branch_files.get(&tenant_id)
     }
 }
@@ -146,7 +161,7 @@ impl RemoteTimeline {
     pub fn stored_files(&self, timeline_dir: &Path) -> BTreeSet<PathBuf> {
         self.timeline_files
             .values()
-            .map(|file_entry| timeline_dir.join(&file_entry.subpath))
+            .map(|file_entry| file_entry.subpath.as_path(timeline_dir))
             .collect()
     }
 
@@ -230,9 +245,6 @@ pub struct ArchiveDescription {
     pub header_size: u64,
     pub disk_consistent_lsn: Lsn,
     pub archive_name: String,
-    // TODO kb this is a part of the index, but it's not portable:
-    // other machine with different working directory may deserialize this file
-    pub download_path: PathBuf,
 }
 
 pub(super) fn parse_archive_description(
@@ -314,11 +326,11 @@ pub(super) fn parse_archive_description(
         .ok_or_else(|| anyhow!("Archive '{}' has no file name", archive_path.display()))?
         .to_string_lossy()
         .to_string();
+
     Ok((
         TimelineSyncId(tenant_id, timeline_id),
         ArchiveId(disk_consistent_lsn),
         ArchiveDescription {
-            download_path: archive_path,
             header_size,
             disk_consistent_lsn,
             archive_name,
@@ -336,15 +348,15 @@ mod tests {
             files: vec![
                 FileEntry {
                     size: 5,
-                    subpath: "one".to_string(),
+                    subpath: RelativePath("one".to_string()),
                 },
                 FileEntry {
                     size: 1,
-                    subpath: "two".to_string(),
+                    subpath: RelativePath("two".to_string()),
                 },
                 FileEntry {
                     size: 222,
-                    subpath: "zero".to_string(),
+                    subpath: RelativePath("zero".to_string()),
                 },
             ],
             metadata_file_size: 5,

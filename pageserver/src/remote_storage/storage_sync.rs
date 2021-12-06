@@ -59,7 +59,7 @@ mod upload;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     num::{NonZeroU32, NonZeroUsize},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     thread,
 };
@@ -77,7 +77,7 @@ use tracing::*;
 use self::{
     compression::ArchiveHeader,
     download::download_timeline,
-    index::{ArchiveDescription, ArchiveId, RemoteTimeline, RemoteTimelineIndex},
+    index::{ArchiveDescription, ArchiveId, RelativePath, RemoteTimeline, RemoteTimelineIndex},
     upload::upload_timeline_checkpoint,
 };
 use super::{RemoteStorage, SyncStartupData, TimelineSyncId};
@@ -376,6 +376,7 @@ async fn collect_timeline_descriptions<
         .into_iter()
         .map(|remote_path| (storage.local_path(&remote_path), remote_path))
     {
+        // TODO kb this is not always right now, with branches uploaded
         match local_path.and_then(index::parse_archive_description) {
             Ok((sync_id, archive_id, archive_description)) => {
                 description
@@ -674,6 +675,7 @@ async fn update_index_description<
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     (storage, index): &(S, RwLock<RemoteTimelineIndex>),
+    timeline_dir: &Path,
     id: TimelineSyncId,
 ) -> anyhow::Result<RemoteTimeline> {
     let mut index_write = index.write().await;
@@ -684,7 +686,7 @@ async fn update_index_description<
             let mut archive_header_downloads = FuturesUnordered::new();
             for (&archive_id, description) in description {
                 archive_header_downloads.push(async move {
-                    let header = download_archive_header(storage, description)
+                    let header = download_archive_header(storage, timeline_dir, description)
                         .await
                         .map_err(|e| (e, archive_id))?;
                     Ok((archive_id, description.header_size, header))
@@ -714,10 +716,11 @@ async fn download_archive_header<
     S: RemoteStorage<StoragePath = P> + Send + Sync + 'static,
 >(
     storage: &S,
+    timeline_dir: &Path,
     description: &ArchiveDescription,
 ) -> anyhow::Result<ArchiveHeader> {
     let mut header_buf = std::io::Cursor::new(Vec::new());
-    let remote_path = storage.storage_path(&description.download_path)?;
+    let remote_path = storage.storage_path(&timeline_dir.join(&description.archive_name))?;
     storage
         .download_range(
             &remote_path,
@@ -734,7 +737,7 @@ async fn download_archive_header<
 async fn tenant_branch_files(
     conf: &'static PageServerConf,
     tenant_id: ZTenantId,
-) -> anyhow::Result<HashSet<PathBuf>> {
+) -> anyhow::Result<HashSet<RelativePath>> {
     let branches_dir = conf.branches_path(&tenant_id);
     let mut branch_entries = fs::read_dir(&branches_dir)
         .await
@@ -743,7 +746,7 @@ async fn tenant_branch_files(
     let mut branch_files = HashSet::new();
     while let Some(branch_entry) = branch_entries.next_entry().await? {
         if branch_entry.file_type().await?.is_file() {
-            branch_files.insert(branch_entry.path());
+            branch_files.insert(RelativePath::new(&branches_dir, branch_entry.path())?);
         }
     }
     Ok(branch_files)

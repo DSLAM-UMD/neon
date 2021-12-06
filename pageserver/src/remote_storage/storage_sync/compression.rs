@@ -45,6 +45,8 @@ use zenith_utils::{bin_ser::BeSer, lsn::Lsn};
 
 use crate::layered_repository::metadata::{TimelineMetadata, METADATA_FILE_NAME};
 
+use super::index::RelativePath;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchiveHeader {
     pub files: Vec<FileEntry>,
@@ -58,7 +60,7 @@ pub struct FileEntry {
     /// Uncompressed file size, bytes.
     pub size: u64,
     /// A path, relative to the directory root, used when compressing the directory contents.
-    pub subpath: String,
+    pub subpath: RelativePath,
 }
 
 const ARCHIVE_EXTENSION: &str = "-.zst_";
@@ -274,20 +276,18 @@ async fn uncompress_with_header(
     for entry in header.files {
         uncompress_entry(
             &mut archive,
-            &entry.subpath,
+            &entry.subpath.as_path(&destination_dir),
             entry.size,
             files_to_skip,
-            destination_dir,
         )
         .await
         .with_context(|| format!("Failed to uncompress archive entry {:?}", entry))?;
     }
     uncompress_entry(
         &mut archive,
-        METADATA_FILE_NAME,
+        &destination_dir.join(METADATA_FILE_NAME),
         header.metadata_file_size,
         files_to_skip,
-        destination_dir,
     )
     .await
     .context("Failed to uncompress the metadata entry")?;
@@ -296,12 +296,10 @@ async fn uncompress_with_header(
 
 async fn uncompress_entry(
     archive: &mut ZstdDecoder<io::BufReader<impl io::AsyncRead + Send + Sync + Unpin>>,
-    entry_subpath: &str,
+    destination_path: &Path,
     entry_size: u64,
     files_to_skip: &HashSet<PathBuf>,
-    destination_dir: &Path,
 ) -> anyhow::Result<()> {
-    let destination_path = destination_dir.join(entry_subpath);
     if let Some(parent) = destination_path.parent() {
         fs::create_dir_all(parent).await.with_context(|| {
             format!(
@@ -311,7 +309,7 @@ async fn uncompress_entry(
         })?;
     };
 
-    if files_to_skip.contains(destination_path.as_path()) {
+    if files_to_skip.contains(destination_path) {
         debug!("Skipping {}", destination_path.display());
         read_n_bytes(entry_size, archive, &mut io::sink())
             .await
@@ -349,7 +347,7 @@ async fn write_archive_contents(
 ) -> anyhow::Result<()> {
     debug!("Starting writing files into archive");
     for file_entry in header.files {
-        let path = source_dir.join(&file_entry.subpath);
+        let path = file_entry.subpath.as_path(&source_dir);
         let mut source_file =
             io::BufReader::new(fs::File::open(&path).await.with_context(|| {
                 format!(
@@ -413,16 +411,12 @@ async fn prepare_header(
 
         if file_path.file_name().and_then(|name| name.to_str()) != Some(METADATA_FILE_NAME) {
             let entry = FileEntry {
-                subpath: file_path
-                    .strip_prefix(&source_dir)
-                    .with_context(|| {
-                        format!(
-                            "File '{}' does not belong to pageserver workspace",
-                            file_path.display()
-                        )
-                    })?
-                    .to_string_lossy()
-                    .to_string(),
+                subpath: RelativePath::new(source_dir, file_path).with_context(|| {
+                    format!(
+                        "File '{}' does not belong to pageserver workspace",
+                        file_path.display()
+                    )
+                })?,
                 size: file_metadata.len(),
             };
             archive_files.push(entry);

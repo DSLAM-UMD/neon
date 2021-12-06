@@ -39,6 +39,7 @@ pub struct BranchInfo {
     pub current_logical_size_non_incremental: Option<usize>,
 }
 
+// TODO kb add an http method to init a certain timeline. Or somehow predownload the braches?
 impl BranchInfo {
     pub fn from_path<T: AsRef<Path>>(
         path: T,
@@ -56,7 +57,6 @@ impl BranchInfo {
 
         let timeline = match repo.get_timeline(timeline_id)? {
             Some(local_entry) => local_entry,
-            // TODO kb return something kind instead?
             None => bail!("Attempting to get the info for the remote timeline"),
         };
 

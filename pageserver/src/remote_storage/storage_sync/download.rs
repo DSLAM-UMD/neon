@@ -46,6 +46,8 @@ pub(super) async fn download_timeline<
         return Some(false);
     }
 
+    let TimelineSyncId(tenant_id, timeline_id) = sync_id;
+
     let index_read = remote_assets.1.read().await;
     let remote_timeline = match index_read.entry(&sync_id) {
         None => {
@@ -56,7 +58,13 @@ pub(super) async fn download_timeline<
         Some(IndexEntry::Description(_)) => {
             drop(index_read);
             debug!("Found timeline description for the given ids, downloading the full index");
-            match update_index_description(remote_assets.as_ref(), sync_id).await {
+            match update_index_description(
+                remote_assets.as_ref(),
+                &config.timeline_path(&timeline_id, &tenant_id),
+                sync_id,
+            )
+            .await
+            {
                 Ok(remote_timeline) => Cow::Owned(remote_timeline),
                 Err(e) => {
                     error!("Failed to download full timeline index: {:#}", e);
@@ -80,7 +88,6 @@ pub(super) async fn download_timeline<
     let archives_total = archives_to_download.len();
     debug!("Downloading {} archives of a timeline", archives_total);
 
-    let TimelineSyncId(tenant_id, timeline_id) = sync_id;
     while let Some(archive_id) = archives_to_download.pop() {
         match try_download_archive(
             Arc::clone(&remote_assets),
@@ -172,21 +179,24 @@ async fn download_missing_branches<
         let mut remote_only_branches_downloads = remote_branches
             .difference(&local_branches)
             .map(|remote_only_branch| async move {
-                let storage_path = storage.storage_path(remote_only_branch).with_context(|| {
-                    format!(
-                        "Failed to derive a storage path for branch with local path '{}'",
-                        remote_only_branch.display()
-                    )
-                })?;
+                let branches_dir = config.branches_path(&tenant_id);
+                let remote_branch_path = remote_only_branch.as_path(&branches_dir);
+                let storage_path =
+                    storage.storage_path(&remote_branch_path).with_context(|| {
+                        format!(
+                            "Failed to derive a storage path for branch with local path '{}'",
+                            remote_branch_path.display()
+                        )
+                    })?;
                 let mut target_file = fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
-                    .open(remote_only_branch)
+                    .open(&remote_branch_path)
                     .await
                     .with_context(|| {
                         format!(
                             "Failed to create local branch file at '{}'",
-                            remote_only_branch.display()
+                            remote_branch_path.display()
                         )
                     })?;
                 storage
