@@ -249,21 +249,25 @@ impl ReplicationConn {
         info!("Start replication from {:?} till {:?}", start_pos, stop_pos);
 
         // Don't spam pageserver with callmemaybe queries
-        // when connection is already established.
+        // when connection to compute node is already established.
         let _guard = {
-            let timelineid = swh.timeline.get().timelineid;
-            let tenant_id = swh.tenantid.unwrap();
-            let tx_clone = swh.tx.clone();
-            swh.tx
-                .blocking_send(CallmeEvent::Pause(tenant_id, timelineid))
-                .unwrap();
+            if swh.appname == Some("wal_proposer_recovery".to_string()) {
+                None
+            } else {
+                let timelineid = swh.timeline.get().timelineid;
+                let tenant_id = swh.tenantid.unwrap();
+                let tx_clone = swh.tx.clone();
+                swh.tx
+                    .blocking_send(CallmeEvent::Pause(tenant_id, timelineid))
+                    .unwrap();
 
-            // create a guard to subscribe callback again, when this connection will exit
-            Some(ReplicationStreamGuard {
-                tx: tx_clone,
-                tenant_id,
-                timelineid,
-            })
+                // create a guard to subscribe callback again, when this connection will exit
+                Some(ReplicationStreamGuard {
+                    tx: tx_clone,
+                    tenant_id,
+                    timelineid,
+                })
+            }
         };
 
         // switch to copy
