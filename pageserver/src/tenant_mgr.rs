@@ -102,7 +102,7 @@ fn put_timelines_into_tenant(
                 conf,
                 Arc::new(walredo_mgr),
                 tenant_id,
-                true,
+                conf.remote_storage_config.is_some(),
             ));
             tenant.repo = Some(Arc::clone(&repo));
             repo

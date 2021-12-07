@@ -166,7 +166,7 @@ impl Repository for LayeredRepository {
             self.tenantid,
             Arc::clone(&self.walredo_mgr),
             0,
-            true,
+            self.upload_relishes,
         );
 
         let timeline_rc = Arc::new(timeline);

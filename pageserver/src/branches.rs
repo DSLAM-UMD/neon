@@ -153,9 +153,7 @@ pub fn create_repo(
         conf,
         wal_redo_manager,
         tenantid,
-        // TODO kb why unconditionally uploading? How to use the conf? When the false is used in prod?
-        // Also check the timelines' values for this flag, also quite unconditional
-        true,
+        conf.remote_storage_config.is_some(),
     ));
 
     // Load data into pageserver
