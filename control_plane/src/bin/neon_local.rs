@@ -141,6 +141,15 @@ fn main() -> Result<()> {
         .takes_value(true)
         .required(false);
 
+    let regions_arg = Arg::new("regions")
+        .long("regions")
+        .help("List of branch names for each regions. The position of the branch in this list corresponds to its region id (1-based).")
+        .takes_value(true)
+        .use_value_delimiter(true)
+        .require_delimiter(true)
+        .multiple_values(true)
+        .required(false);
+
     let matches = App::new("Neon CLI")
         .setting(AppSettings::ArgRequiredElseHelp)
         .version(GIT_VERSION)
@@ -250,6 +259,7 @@ fn main() -> Result<()> {
                     .arg(tenant_id_arg.clone())
                     .arg(lsn_arg.clone())
                     .arg(port_arg.clone())
+                    .arg(regions_arg.clone())
                     .arg(
                         Arg::new("config-only")
                             .help("Don't do basebackup, create compute node with only config files")
@@ -266,7 +276,7 @@ fn main() -> Result<()> {
                     .arg(lsn_arg.clone())
                     .arg(port_arg.clone())
                     .arg(pg_version_arg.clone())
-                )
+                    .arg(regions_arg.clone()))
                 .subcommand(
                     App::new("stop")
                     .arg(pg_node_arg.clone())
@@ -683,8 +693,7 @@ fn handle_timeline(timeline_match: &ArgMatches, env: &mut local_env::LocalEnv) -
             pageserver.timeline_import(tenant_id, timeline_id, base, pg_wal, pg_version)?;
             println!("Creating node for imported timeline ...");
             env.register_branch_mapping(name.to_string(), tenant_id, timeline_id)?;
-
-            cplane.new_node(tenant_id, name, timeline_id, None, None, pg_version)?;
+            cplane.new_node(tenant_id, name, timeline_id, None, None, pg_version, None)?;
             println!("Done");
         }
         Some(("branch", branch_match)) => {
@@ -831,7 +840,28 @@ fn handle_pg(pg_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<()> {
                 .parse::<u32>()
                 .context("Failed to parse postgres version from the argument string")?;
 
-            cplane.new_node(tenant_id, &node_name, timeline_id, lsn, port, pg_version)?;
+            let region_timeline_ids = sub_args
+                .values_of("regions")
+                .map(|regions| {
+                    regions
+                        .map(|r| {
+                            env.get_branch_timeline_id(r, tenant_id).ok_or_else(|| {
+                                anyhow!("Found no timeline id for branch name '{}'", r)
+                            })
+                        })
+                        .collect()
+                })
+                .transpose()?;
+
+            cplane.new_node(
+                tenant_id,
+                &node_name,
+                timeline_id,
+                lsn,
+                port,
+                pg_version,
+                region_timeline_ids,
+            )?;
         }
         "start" => {
             let port: Option<u16> = match sub_args.value_of("port") {
@@ -874,6 +904,19 @@ fn handle_pg(pg_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<()> {
                     .unwrap()
                     .parse::<u32>()
                     .context("Failed to parse postgres version from the argument string")?;
+                let region_timeline_ids = sub_args
+                    .values_of("regions")
+                    .map(|regions| {
+                        regions
+                            .map(|r| {
+                                env.get_branch_timeline_id(r, tenant_id).ok_or_else(|| {
+                                    anyhow!("Found no timeline id for branch name '{}'", r)
+                                })
+                            })
+                            .collect()
+                    })
+                    .transpose()?;
+
                 // when used with custom port this results in non obvious behaviour
                 // port is remembered from first start command, i e
                 // start --port X
@@ -883,9 +926,15 @@ fn handle_pg(pg_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<()> {
                     "Starting new postgres (v{}) {} on timeline {} ...",
                     pg_version, node_name, timeline_id
                 );
-
-                let node =
-                    cplane.new_node(tenant_id, node_name, timeline_id, lsn, port, pg_version)?;
+                let node = cplane.new_node(
+                    tenant_id,
+                    node_name,
+                    timeline_id,
+                    lsn,
+                    port,
+                    pg_version,
+                    region_timeline_ids,
+                )?;
                 node.start(&auth_token)?;
             }
         }
