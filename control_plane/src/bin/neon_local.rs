@@ -484,6 +484,7 @@ fn handle_timeline(timeline_match: &ArgMatches, env: &mut local_env::LocalEnv) -
                 None,
                 pg_version,
                 ComputeMode::Primary,
+                None,
             )?;
             println!("Done");
         }
@@ -641,6 +642,19 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                 (Some(_), true) => anyhow::bail!("cannot specify both lsn and hot-standby"),
             };
 
+            let region_timeline_ids = sub_args
+                .get_many::<String>("regions")
+                .map(|regions| {
+                    regions
+                        .map(|r| {
+                            env.get_branch_timeline_id(r, tenant_id).ok_or_else(|| {
+                                anyhow!("Found no timeline id for branch name '{}'", r)
+                            })
+                        })
+                        .collect()
+                })
+                .transpose()?;
+
             cplane.new_endpoint(
                 &endpoint_id,
                 tenant_id,
@@ -649,6 +663,7 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                 http_port,
                 pg_version,
                 mode,
+                region_timeline_ids,
             )?;
         }
         "start" => {
@@ -729,6 +744,19 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                     (Some(_), true) => anyhow::bail!("cannot specify both lsn and hot-standby"),
                 };
 
+                let region_timeline_ids = sub_args
+                    .get_many::<String>("regions")
+                    .map(|regions| {
+                        regions
+                            .map(|r| {
+                                env.get_branch_timeline_id(r, tenant_id).ok_or_else(|| {
+                                    anyhow!("Found no timeline id for branch name '{}'", r)
+                                })
+                            })
+                            .collect()
+                    })
+                    .transpose()?;
+
                 // when used with custom port this results in non obvious behaviour
                 // port is remembered from first start command, i e
                 // start --port X
@@ -744,6 +772,7 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                     http_port,
                     pg_version,
                     mode,
+                    region_timeline_ids,
                 )?;
                 ep.start(&auth_token, safekeepers, remote_ext_config)?;
             }
@@ -1019,7 +1048,12 @@ fn cli() -> Command {
     let hot_standby_arg = Arg::new("hot-standby")
         .value_parser(value_parser!(bool))
         .long("hot-standby")
-        .help("If set, the node will be a hot replica on the specified timeline")
+        .help("If set, the node will be a hot replica on the specified timeline");
+
+    let regions_arg = Arg::new("regions")
+        .long("regions")
+        .help("List of branch names for each regions. The position of the branch in this list corresponds to its region id (1-based).")
+        .value_delimiter(',')
         .required(false);
 
     let force_arg = Arg::new("force")
@@ -1149,6 +1183,7 @@ fn cli() -> Command {
                     .arg(lsn_arg.clone())
                     .arg(pg_port_arg.clone())
                     .arg(http_port_arg.clone())
+                    .arg(regions_arg.clone())
                     .arg(
                         Arg::new("config-only")
                             .help("Don't do basebackup, create endpoint directory with only config files")
@@ -1170,6 +1205,7 @@ fn cli() -> Command {
                     .arg(hot_standby_arg)
                     .arg(safekeepers_arg)
                     .arg(remote_ext_config_args)
+                    .arg(regions_arg.clone())
                 )
                 .subcommand(
                     Command::new("stop")
