@@ -10,7 +10,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use zenith_utils::connstring::connection_host_port;
 use zenith_utils::lsn::Lsn;
 use zenith_utils::postgres_backend::AuthType;
@@ -118,6 +118,99 @@ impl ComputeControlPlane {
             lsn,
             tenantid,
             uses_wal_proposer: false,
+            multi_region: None,
+        });
+
+        node.create_pgdata()?;
+        node.setup_pg_conf(self.env.pageserver.auth_type)?;
+
+        self.nodes
+            .insert((tenantid, node.name.clone()), Arc::clone(&node));
+
+        Ok(node)
+    }
+
+    /// Keep this in sync with new_node
+    pub fn new_multi_region_node(
+        &mut self,
+        tenantid: ZTenantId,
+        name: &str,
+        global_branch: &str,
+        region_specs: &str,
+        port: Option<u16>,
+    ) -> Result<Arc<PostgresNode>> {
+        const CURRENT_MARKER: char = '*';
+
+        let mut timelineids = Vec::new();
+        let mut addresses: Vec<SocketAddr> = Vec::new();
+        let mut lsns = Vec::new();
+        let mut current_region: Option<u32> = None;
+        let region_specs = region_specs.split(',');
+
+        // Push global timeline to the timeline list
+        let (global_timelineid, _lsn) = self.parse_point_in_time(tenantid, global_branch)?;
+        timelineids.push(global_timelineid);
+        // FIXME: The first timeline is a global timeline, which we assumed to be static for now
+        addresses.push("0.0.0.0:0000".parse()?);
+
+        // Parse the region specs and push other regions to the timeline list
+        for (i, spec) in region_specs.into_iter().enumerate() {
+            // Region spec ends with "*" is the current region
+            if spec.ends_with(CURRENT_MARKER) {
+                if current_region.is_none() {
+                    // Region IDs are 1-based
+                    current_region = Some(i as u32 + 1);
+                } else {
+                    bail!("Exactly one region can be marked as current");
+                }
+            }
+            let (branch, address) = spec
+                .trim_end_matches(CURRENT_MARKER)
+                .split_once('@')
+                .ok_or_else(|| anyhow!("invalid region spec: {}", spec))?;
+
+            let (timelineid, lsn) = self.parse_point_in_time(tenantid, branch)?;
+            timelineids.push(timelineid);
+            lsns.push(lsn);
+            addresses.push(address.parse()?);
+        }
+
+        let current_region = current_region
+            .ok_or_else(|| anyhow!("Exactly one region must be marked as current"))?;
+
+        println!(
+            "Timeline ids: {}",
+            timelineids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<String>>()
+                .join(",")
+        );
+        println!(
+            "Addresses: {}",
+            addresses
+                .iter()
+                .map(|addr| addr.to_string())
+                .collect::<Vec<String>>()
+                .join(",")
+        );
+
+        let port = port.unwrap_or_else(|| self.get_port());
+        let node = Arc::new(PostgresNode {
+            name: name.to_owned(),
+            address: SocketAddr::new("127.0.0.1".parse().unwrap(), port),
+            env: self.env.clone(),
+            pageserver: Arc::clone(&self.pageserver),
+            is_test: false,
+            timelineid: timelineids[current_region as usize].clone(),
+            lsn: lsns[current_region as usize].clone(),
+            tenantid,
+            uses_wal_proposer: false,
+            multi_region: Some(MultiRegion {
+                timelineids,
+                addresses,
+                current_region,
+            }),
         });
 
         node.create_pgdata()?;
@@ -133,6 +226,13 @@ impl ComputeControlPlane {
 ///////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
+struct MultiRegion {
+    timelineids: Vec<ZTimelineId>,
+    addresses: Vec<SocketAddr>,
+    current_region: u32,
+}
+
+#[derive(Debug)]
 pub struct PostgresNode {
     pub address: SocketAddr,
     name: String,
@@ -143,6 +243,7 @@ pub struct PostgresNode {
     pub lsn: Option<Lsn>, // if it's a read-only node. None for primary
     pub tenantid: ZTenantId,
     uses_wal_proposer: bool,
+    multi_region: Option<MultiRegion>,
 }
 
 impl PostgresNode {
@@ -192,6 +293,7 @@ impl PostgresNode {
             lsn: recovery_target_lsn,
             tenantid,
             uses_wal_proposer,
+            multi_region: None,
         })
     }
 
@@ -376,6 +478,29 @@ impl PostgresNode {
             // testing.
             conf.append("synchronous_standby_names", "pageserver");
             conf.append("zenith.callmemaybe_connstring", &self.connstr());
+        }
+
+        if let Some(multi_region) = &self.multi_region {
+            let region_timelines = multi_region
+                .timelineids
+                .iter()
+                .map(ZTimelineId::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            conf.append("zenith.region_timelines", &region_timelines);
+
+            let region_connstrings = multi_region
+                .addresses
+                .iter()
+                .map(SocketAddr::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            conf.append("zenith.region_connstrings", &region_connstrings);
+
+            conf.append(
+                "zenith.current_region",
+                &multi_region.current_region.to_string(),
+            );
         }
 
         let mut file = File::create(self.pgdata().join("postgresql.conf"))?;

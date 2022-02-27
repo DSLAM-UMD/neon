@@ -60,6 +60,7 @@ struct PagestreamExistsRequest {
     latest: bool,
     lsn: Lsn,
     rel: RelTag,
+    region: u32,
 }
 
 #[derive(Debug)]
@@ -67,6 +68,7 @@ struct PagestreamNblocksRequest {
     latest: bool,
     lsn: Lsn,
     rel: RelTag,
+    region: u32,
 }
 
 #[derive(Debug)]
@@ -75,6 +77,7 @@ struct PagestreamGetPageRequest {
     lsn: Lsn,
     rel: RelTag,
     blkno: u32,
+    region: u32,
 }
 
 #[derive(Debug)]
@@ -116,6 +119,7 @@ impl PagestreamFeMessage {
                     relnode: body.get_u32(),
                     forknum: body.get_u8(),
                 },
+                region: body.get_u32(),
             })),
             1 => Ok(PagestreamFeMessage::Nblocks(PagestreamNblocksRequest {
                 latest: body.get_u8() != 0,
@@ -126,6 +130,7 @@ impl PagestreamFeMessage {
                     relnode: body.get_u32(),
                     forknum: body.get_u8(),
                 },
+                region: body.get_u32(),
             })),
             2 => Ok(PagestreamFeMessage::GetPage(PagestreamGetPageRequest {
                 latest: body.get_u8() != 0,
@@ -137,6 +142,7 @@ impl PagestreamFeMessage {
                     forknum: body.get_u8(),
                 },
                 blkno: body.get_u32(),
+                region: body.get_u32(),
             })),
             _ => bail!("unknown smgr message tag: {},'{:?}'", msg_tag, body),
         }
@@ -356,6 +362,90 @@ impl PageServerHandler {
                                 .with_label_values(&["get_page_at_lsn"])
                                 .observe_closure_duration(|| {
                                     self.handle_get_page_at_lsn_request(timeline.as_ref(), &req)
+                                }),
+                        };
+
+                        let response = response.unwrap_or_else(|e| {
+                            // print the all details to the log with {:#}, but for the client the
+                            // error message is enough
+                            error!("error reading relation or page version: {:?}", e);
+                            PagestreamBeMessage::Error(PagestreamErrorResponse {
+                                message: e.to_string(),
+                            })
+                        });
+
+                        pgb.write_message(&BeMessage::CopyData(&response.serialize()))?;
+                    } else {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if !is_socket_read_timed_out(&e) {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// This method is similar to handle_pagerequests but also supports requests
+    /// on multiple timelines.
+    ///
+    /// Keep this relatively in sync with handle_pagerequests.
+    fn handle_pagerequests_multi_timelines(
+        &self,
+        pgb: &mut PostgresBackend,
+        timelineids: Vec<ZTimelineId>,
+        tenantid: ZTenantId,
+    ) -> anyhow::Result<()> {
+        let _enter = info_span!("multipagestream", tenant = %tenantid).entered();
+
+        let timelines = timelineids
+            .into_iter()
+            .map(|timelineid| tenant_mgr::get_timeline_for_tenant(tenantid, timelineid))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        /* switch client to COPYBOTH */
+        pgb.write_message(&BeMessage::CopyBothResponse)?;
+
+        while !thread_mgr::is_shutdown_requested() {
+            match pgb.read_message() {
+                Ok(message) => {
+                    if let Some(message) = message {
+                        trace!("query: {:?}", message);
+
+                        let copy_data_bytes = match message {
+                            FeMessage::CopyData(bytes) => bytes,
+                            _ => continue,
+                        };
+
+                        let zenith_fe_msg = PagestreamFeMessage::parse(copy_data_bytes)?;
+
+                        let response = match zenith_fe_msg {
+                            PagestreamFeMessage::Exists(req) => SMGR_QUERY_TIME
+                                .with_label_values(&["get_rel_exists"])
+                                .observe_closure_duration(|| {
+                                    self.handle_get_rel_exists_request(
+                                        timelines[req.region as usize].as_ref(),
+                                        &req,
+                                    )
+                                }),
+                            PagestreamFeMessage::Nblocks(req) => SMGR_QUERY_TIME
+                                .with_label_values(&["get_rel_size"])
+                                .observe_closure_duration(|| {
+                                    self.handle_get_nblocks_request(
+                                        timelines[req.region as usize].as_ref(),
+                                        &req,
+                                    )
+                                }),
+                            PagestreamFeMessage::GetPage(req) => SMGR_QUERY_TIME
+                                .with_label_values(&["get_page_at_lsn"])
+                                .observe_closure_duration(|| {
+                                    self.handle_get_page_at_lsn_request(
+                                        timelines[req.region as usize].as_ref(),
+                                        &req,
+                                    )
                                 }),
                         };
 
@@ -612,6 +702,24 @@ impl postgres_backend::Handler for PageServerHandler {
             self.check_permission(Some(tenantid))?;
 
             self.handle_pagerequests(pgb, timelineid, tenantid)?;
+        } else if query_string.starts_with("multipagestream ") {
+            // multipagestream <tenant id as hex string> <timelineid>,<timelineid>,...
+            let (_, params_raw) = query_string.split_at("multipagestream ".len());
+            let params: Vec<_> = params_raw.split(' ').collect();
+            ensure!(
+                params.len() == 2,
+                "invalid param number for multipagestream command"
+            );
+
+            let tenantid = ZTenantId::from_str(params[0])?;
+            self.check_permission(Some(tenantid))?;
+
+            let timelineids = params[1]
+                .split(',')
+                .map(|timelineid_str| ZTimelineId::from_str(timelineid_str))
+                .collect::<Result<_, _>>()?;
+
+            self.handle_pagerequests_multi_timelines(pgb, timelineids, tenantid)?;
         } else if query_string.starts_with("basebackup ") {
             let (_, params_raw) = query_string.split_at("basebackup ".len());
             let params = params_raw.split_whitespace().collect::<Vec<_>>();

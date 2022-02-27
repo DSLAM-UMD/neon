@@ -190,6 +190,19 @@ fn main() -> Result<()> {
                     .arg(timeline_arg.clone())
                     .arg(tenantid_arg.clone())
                     .arg(port_arg.clone()))
+                .subcommand(App::new("start-mr")
+                    .about("Start a postgres compute node in multi-region mode.\n This command is similar to \"start\", but for the multi-region mode")
+                    .arg(pg_node_arg.clone())
+                    .arg(Arg::new("global")
+                        .index(2)
+                        .help("Global branch name")
+                        .required(true))
+                    .arg(Arg::new("regions")
+                        .index(3)
+                        .help("Comma-separated list of region specs with the form branch_names@ip:[port][*]. Index of a region spec in this list corresponds to its region id.\n\"*\" marks the current region and must appear exactly once.\n\"port\" is the safekeeper's port.")
+                        .required(true))
+                    .arg(tenantid_arg.clone())
+                    .arg(port_arg.clone()))
                 .subcommand(
                     App::new("stop")
                         .arg(pg_node_arg.clone())
@@ -568,6 +581,53 @@ fn handle_pg(pg_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<()> {
                     node_name, timeline_name
                 );
                 let node = cplane.new_node(tenantid, node_name, timeline_name, port)?;
+                node.start(&auth_token)?;
+            }
+        }
+        "start-mr" => {
+            let node_name = sub_args.value_of("node").unwrap_or("main");
+            let global_timeline_name = sub_args.value_of("global").unwrap();
+            let region_specs = sub_args.value_of("regions");
+
+            let port: Option<u16> = match sub_args.value_of("port") {
+                Some(p) => Some(p.parse()?),
+                None => None,
+            };
+
+            let node = cplane.nodes.get(&(tenantid, node_name.to_owned()));
+
+            let auth_token = if matches!(env.pageserver.auth_type, AuthType::ZenithJWT) {
+                let claims = Claims::new(Some(tenantid), Scope::Tenant);
+
+                Some(env.generate_auth_token(&claims)?)
+            } else {
+                None
+            };
+
+            if let Some(node) = node {
+                if region_specs.is_some() {
+                    println!("region specs ignored because node exists already");
+                }
+                println!("Starting existing postgres {}...", node_name);
+                node.start(&auth_token)?;
+            } else {
+                // when used with custom port this results in non obvious behaviour
+                // port is remembered from first start command, i e
+                // start --port X
+                // stop
+                // start <-- will also use port X even without explicit port argument
+                let region_specs = region_specs.unwrap();
+                println!(
+                    "Starting new postgres {} with region specs {}...",
+                    node_name, region_specs
+                );
+                let node = cplane.new_multi_region_node(
+                    tenantid,
+                    node_name,
+                    global_timeline_name,
+                    region_specs,
+                    port,
+                )?;
                 node.start(&auth_token)?;
             }
         }
