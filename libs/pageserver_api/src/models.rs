@@ -448,6 +448,7 @@ pub struct PagestreamExistsRequest {
     pub latest: bool,
     pub lsn: Lsn,
     pub rel: RelTag,
+    pub region: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -455,6 +456,7 @@ pub struct PagestreamNblocksRequest {
     pub latest: bool,
     pub lsn: Lsn,
     pub rel: RelTag,
+    pub region: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -463,6 +465,7 @@ pub struct PagestreamGetPageRequest {
     pub lsn: Lsn,
     pub rel: RelTag,
     pub blkno: u32,
+    pub region: u32,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -562,6 +565,7 @@ impl PagestreamFeMessage {
                     relnode: body.read_u32::<BigEndian>()?,
                     forknum: body.read_u8()?,
                 },
+                region: body.read_u32::<BigEndian>()?,
             })),
             1 => Ok(PagestreamFeMessage::Nblocks(PagestreamNblocksRequest {
                 latest: body.read_u8()? != 0,
@@ -572,6 +576,7 @@ impl PagestreamFeMessage {
                     relnode: body.read_u32::<BigEndian>()?,
                     forknum: body.read_u8()?,
                 },
+                region: body.read_u32::<BigEndian>()?,
             })),
             2 => Ok(PagestreamFeMessage::GetPage(PagestreamGetPageRequest {
                 latest: body.read_u8()? != 0,
@@ -583,6 +588,7 @@ impl PagestreamFeMessage {
                     forknum: body.read_u8()?,
                 },
                 blkno: body.read_u32::<BigEndian>()?,
+                region: body.read_u32::<BigEndian>()?,
             })),
             3 => Ok(PagestreamFeMessage::DbSize(PagestreamDbSizeRequest {
                 latest: body.read_u8()? != 0,
@@ -649,6 +655,7 @@ mod tests {
                     dbnode: 3,
                     relnode: 4,
                 },
+                region: 0,
             }),
             PagestreamFeMessage::Nblocks(PagestreamNblocksRequest {
                 latest: false,
@@ -659,6 +666,7 @@ mod tests {
                     dbnode: 3,
                     relnode: 4,
                 },
+                region: 0,
             }),
             PagestreamFeMessage::GetPage(PagestreamGetPageRequest {
                 latest: true,
@@ -670,6 +678,7 @@ mod tests {
                     relnode: 4,
                 },
                 blkno: 7,
+                region: 0,
             }),
             PagestreamFeMessage::DbSize(PagestreamDbSizeRequest {
                 latest: true,

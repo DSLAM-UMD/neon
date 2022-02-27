@@ -474,7 +474,7 @@ fn handle_timeline(timeline_match: &ArgMatches, env: &mut local_env::LocalEnv) -
             env.register_branch_mapping(name.to_string(), tenant_id, timeline_id)?;
 
             println!("Creating endpoint for imported timeline ...");
-            cplane.new_endpoint(tenant_id, name, timeline_id, None, None, pg_version)?;
+            cplane.new_endpoint(tenant_id, name, timeline_id, None, None, pg_version, None)?;
             println!("Done");
         }
         Some(("branch", branch_match)) => {
@@ -619,7 +619,28 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                 .copied()
                 .context("Failed to parse postgres version from the argument string")?;
 
-            cplane.new_endpoint(tenant_id, &endpoint_id, timeline_id, lsn, port, pg_version)?;
+            let region_timeline_ids = sub_args
+                .get_many::<String>("regions")
+                .map(|regions| {
+                    regions
+                        .map(|r| {
+                            env.get_branch_timeline_id(r, tenant_id).ok_or_else(|| {
+                                anyhow!("Found no timeline id for branch name '{}'", r)
+                            })
+                        })
+                        .collect()
+                })
+                .transpose()?;
+
+            cplane.new_endpoint(
+                tenant_id,
+                &endpoint_id,
+                timeline_id,
+                lsn,
+                port,
+                pg_version,
+                region_timeline_ids,
+            )?;
         }
         "start" => {
             let port: Option<u16> = sub_args.get_one::<u16>("port").copied();
@@ -659,6 +680,19 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                     .get_one::<u32>("pg-version")
                     .copied()
                     .context("Failed to `pg-version` from the argument string")?;
+                let region_timeline_ids = sub_args
+                    .get_many::<String>("regions")
+                    .map(|regions| {
+                        regions
+                            .map(|r| {
+                                env.get_branch_timeline_id(r, tenant_id).ok_or_else(|| {
+                                    anyhow!("Found no timeline id for branch name '{}'", r)
+                                })
+                            })
+                            .collect()
+                    })
+                    .transpose()?;
+
                 // when used with custom port this results in non obvious behaviour
                 // port is remembered from first start command, i e
                 // start --port X
@@ -673,6 +707,7 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                     lsn,
                     port,
                     pg_version,
+                    region_timeline_ids,
                 )?;
                 ep.start(&auth_token)?;
             }
@@ -928,6 +963,12 @@ fn cli() -> Command {
         .help("Specify Lsn on the timeline to start from. By default, end of the timeline would be used.")
         .required(false);
 
+    let regions_arg = Arg::new("regions")
+        .long("regions")
+        .help("List of branch names for each regions. The position of the branch in this list corresponds to its region id (1-based).")
+        .value_delimiter(',')
+        .required(false);
+
     Command::new("Neon CLI")
         .arg_required_else_help(true)
         .version(GIT_VERSION)
@@ -1046,6 +1087,7 @@ fn cli() -> Command {
                     .arg(tenant_id_arg.clone())
                     .arg(lsn_arg.clone())
                     .arg(port_arg.clone())
+                    .arg(regions_arg.clone())
                     .arg(
                         Arg::new("config-only")
                             .help("Don't do basebackup, create endpoint directory with only config files")
@@ -1062,6 +1104,7 @@ fn cli() -> Command {
                     .arg(lsn_arg)
                     .arg(port_arg)
                     .arg(pg_version_arg)
+                    .arg(regions_arg.clone())
                 )
                 .subcommand(
                     Command::new("stop")
