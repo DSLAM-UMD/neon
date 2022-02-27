@@ -246,6 +246,7 @@ pub struct PagestreamExistsRequest {
     pub latest: bool,
     pub lsn: Lsn,
     pub rel: RelTag,
+    pub region: u32,
 }
 
 #[derive(Debug)]
@@ -253,6 +254,7 @@ pub struct PagestreamNblocksRequest {
     pub latest: bool,
     pub lsn: Lsn,
     pub rel: RelTag,
+    pub region: u32,
 }
 
 #[derive(Debug)]
@@ -261,6 +263,7 @@ pub struct PagestreamGetPageRequest {
     pub lsn: Lsn,
     pub rel: RelTag,
     pub blkno: u32,
+    pub region: u32,
 }
 
 #[derive(Debug)]
@@ -314,6 +317,7 @@ impl PagestreamFeMessage {
                     relnode: body.get_u32(),
                     forknum: body.get_u8(),
                 },
+                region: body.get_u32(),
             })),
             1 => Ok(PagestreamFeMessage::Nblocks(PagestreamNblocksRequest {
                 latest: body.get_u8() != 0,
@@ -324,6 +328,7 @@ impl PagestreamFeMessage {
                     relnode: body.get_u32(),
                     forknum: body.get_u8(),
                 },
+                region: body.get_u32(),
             })),
             2 => Ok(PagestreamFeMessage::GetPage(PagestreamGetPageRequest {
                 latest: body.get_u8() != 0,
@@ -335,6 +340,7 @@ impl PagestreamFeMessage {
                     forknum: body.get_u8(),
                 },
                 blkno: body.get_u32(),
+                region: body.get_u32(),
             })),
             3 => Ok(PagestreamFeMessage::DbSize(PagestreamDbSizeRequest {
                 latest: body.get_u8() != 0,
