@@ -565,6 +565,7 @@ impl PageServerHandler {
         let exists = timeline.get_rel_exists(req.rel, lsn, req.latest)?;
 
         Ok(PagestreamBeMessage::Exists(PagestreamExistsResponse {
+            lsn,
             exists,
         }))
     }
@@ -582,6 +583,7 @@ impl PageServerHandler {
         let n_blocks = timeline.get_rel_size(req.rel, lsn, req.latest)?;
 
         Ok(PagestreamBeMessage::Nblocks(PagestreamNblocksResponse {
+            lsn,
             n_blocks,
         }))
     }
@@ -631,6 +633,7 @@ impl PageServerHandler {
         let page = timeline.get_rel_page_at_lsn(req.rel, req.blkno, lsn, req.latest)?;
 
         Ok(PagestreamBeMessage::GetPage(PagestreamGetPageResponse {
+            lsn,
             page,
         }))
     }
@@ -669,7 +672,11 @@ impl PageServerHandler {
         }
 
         Ok(PagestreamBeMessage::GetSlruPage(
-            PagestreamGetSlruPageResponse { seg_exists, page },
+            PagestreamGetSlruPageResponse {
+                lsn,
+                seg_exists,
+                page,
+            },
         ))
     }
 
