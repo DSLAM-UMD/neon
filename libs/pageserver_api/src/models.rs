@@ -8,7 +8,7 @@ use utils::{
     lsn::Lsn,
 };
 
-use crate::reltag::RelTag;
+use crate::reltag::{RelTag, SlruKind};
 use anyhow::bail;
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -254,6 +254,7 @@ pub enum PagestreamFeMessage {
     Nblocks(PagestreamNblocksRequest),
     GetPage(PagestreamGetPageRequest),
     DbSize(PagestreamDbSizeRequest),
+    GetSlruPage(PagestreamGetSlruPageRequest),
 }
 
 // Wrapped in libpq CopyData
@@ -261,6 +262,7 @@ pub enum PagestreamBeMessage {
     Exists(PagestreamExistsResponse),
     Nblocks(PagestreamNblocksResponse),
     GetPage(PagestreamGetPageResponse),
+    GetSlruPage(PagestreamGetSlruPageResponse),
     Error(PagestreamErrorResponse),
     DbSize(PagestreamDbSizeResponse),
 }
@@ -297,6 +299,17 @@ pub struct PagestreamDbSizeRequest {
     pub dbnode: u32,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct PagestreamGetSlruPageRequest {
+    pub latest: bool,
+    pub lsn: Lsn,
+    pub kind: SlruKind,
+    pub segno: u32,
+    pub blkno: u32,
+    pub check_exists_only: bool,
+    pub region: u32,
+}
+
 #[derive(Debug)]
 pub struct PagestreamExistsResponse {
     pub exists: bool,
@@ -310,6 +323,12 @@ pub struct PagestreamNblocksResponse {
 #[derive(Debug)]
 pub struct PagestreamGetPageResponse {
     pub page: Bytes,
+}
+
+#[derive(Debug)]
+pub struct PagestreamGetSlruPageResponse {
+    pub seg_exists: bool,
+    pub page: Option<Bytes>,
 }
 
 #[derive(Debug)]
@@ -335,6 +354,7 @@ impl PagestreamFeMessage {
                 bytes.put_u32(req.rel.dbnode);
                 bytes.put_u32(req.rel.relnode);
                 bytes.put_u8(req.rel.forknum);
+                bytes.put_u32(req.region);
             }
 
             Self::Nblocks(req) => {
@@ -345,6 +365,7 @@ impl PagestreamFeMessage {
                 bytes.put_u32(req.rel.dbnode);
                 bytes.put_u32(req.rel.relnode);
                 bytes.put_u8(req.rel.forknum);
+                bytes.put_u32(req.region);
             }
 
             Self::GetPage(req) => {
@@ -356,6 +377,7 @@ impl PagestreamFeMessage {
                 bytes.put_u32(req.rel.relnode);
                 bytes.put_u8(req.rel.forknum);
                 bytes.put_u32(req.blkno);
+                bytes.put_u32(req.region);
             }
 
             Self::DbSize(req) => {
@@ -363,6 +385,17 @@ impl PagestreamFeMessage {
                 bytes.put_u8(if req.latest { 1 } else { 0 });
                 bytes.put_u64(req.lsn.0);
                 bytes.put_u32(req.dbnode);
+            }
+
+            Self::GetSlruPage(req) => {
+                bytes.put_u8(4); /* tag from pagestore_client.h */
+                bytes.put_u8(if req.latest { 1 } else { 0 });
+                bytes.put_u64(req.lsn.0);
+                bytes.put_u8(req.kind.into());
+                bytes.put_u32(req.segno);
+                bytes.put_u32(req.blkno);
+                bytes.put_u8(if req.check_exists_only { 1 } else { 0 });
+                bytes.put_u32(req.region);
             }
         }
 
@@ -417,6 +450,17 @@ impl PagestreamFeMessage {
                 lsn: Lsn::from(body.read_u64::<BigEndian>()?),
                 dbnode: body.read_u32::<BigEndian>()?,
             })),
+            4 => Ok(PagestreamFeMessage::GetSlruPage(
+                PagestreamGetSlruPageRequest {
+                    latest: body.read_u8()? != 0,
+                    lsn: Lsn::from(body.read_u64::<BigEndian>()?),
+                    kind: SlruKind::try_from(body.read_u8()?)?,
+                    segno: body.read_u32::<BigEndian>()?,
+                    blkno: body.read_u32::<BigEndian>()?,
+                    check_exists_only: body.read_u8()? != 0,
+                    region: body.read_u32::<BigEndian>()?,
+                },
+            )),
             _ => bail!("unknown smgr message tag: {:?}", msg_tag),
         }
     }
@@ -440,6 +484,17 @@ impl PagestreamBeMessage {
             Self::GetPage(resp) => {
                 bytes.put_u8(102); /* tag from pagestore_client.h */
                 bytes.put(&resp.page[..]);
+            }
+
+            Self::GetSlruPage(resp) => {
+                bytes.put_u8(103); /* tag from pagestore_client.h */
+                bytes.put_u8(resp.seg_exists as u8);
+                if let Some(page) = &resp.page {
+                    bytes.put_u8(1); // page exists
+                    bytes.put(&page[..]);
+                } else {
+                    bytes.put_u8(0); // page does not exist
+                }
             }
 
             Self::Error(resp) => {
