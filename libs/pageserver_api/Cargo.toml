@@ -13,5 +13,6 @@ bytes.workspace = true
 byteorder.workspace = true
 utils.workspace = true
 postgres_ffi.workspace = true
+num_enum.workplace = true
 
 workspace_hack.workspace = true
