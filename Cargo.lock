@@ -2255,6 +2255,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_enum"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d829733185c1ca374f17e52b762f24f535ec625d2cc1f070e34c8a9068f341b"
+dependencies = [
+ "num_enum_derive",
+]
+
+[[package]]
+name = "num_enum_derive"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2be1598bf1c313dcdd12092e3f1920f463462525a21b7b4e11b4168353d0123e"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "object"
 version = "0.30.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2477,7 +2498,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-tar",
  "tokio-util",
- "toml_edit",
+ "toml_edit 0.17.1",
  "tracing",
  "url",
  "utils",
@@ -2494,6 +2515,7 @@ dependencies = [
  "bytes",
  "const_format",
  "enum-map",
+ "num_enum",
  "postgres_ffi",
  "serde",
  "serde_json",
@@ -2742,6 +2764,16 @@ checksum = "e97e3215779627f01ee256d2fad52f3d95e8e1c11e9fc6fd08f7cd455d5d5c78"
 dependencies = [
  "proc-macro2",
  "syn",
+]
+
+[[package]]
+name = "proc-macro-crate"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66618389e4ec1c7afe67d51a9bf34ff9236480f8d51e7489b7d5ab0303c13f34"
+dependencies = [
+ "once_cell",
+ "toml_edit 0.18.1",
 ]
 
 [[package]]
@@ -3059,7 +3091,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
- "toml_edit",
+ "toml_edit 0.17.1",
  "tracing",
  "utils",
  "workspace_hack",
@@ -3342,7 +3374,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-postgres",
- "toml_edit",
+ "toml_edit 0.17.1",
  "tracing",
  "url",
  "utils",
@@ -4146,6 +4178,17 @@ dependencies = [
  "itertools",
  "nom8",
  "serde",
+ "toml_datetime",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56c59d8dd7d0dcbc6428bf7aa2f0e823e26e43b3c9aca15bbc9475d23e5fa12b"
+dependencies = [
+ "indexmap",
+ "nom8",
  "toml_datetime",
 ]
 
