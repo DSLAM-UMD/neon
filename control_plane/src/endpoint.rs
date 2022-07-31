@@ -342,7 +342,7 @@ impl Endpoint {
             // NOTE: avoid spaces in connection string, because it is less error prone if we forward it somewhere.
             format!("postgresql://no_user@{host}:{port}")
         };
-        conf.append("shared_preload_libraries", "neon");
+        conf.append("shared_preload_libraries", "neon,remotexact");
         conf.append_line("");
         conf.append("neon.pageserver_connstring", &pageserver_connstr);
         conf.append("neon.tenant_id", &self.tenant_id.to_string());
