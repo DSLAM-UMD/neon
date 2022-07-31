@@ -290,7 +290,7 @@ impl Endpoint {
         conf.append("restart_after_crash", "off");
 
         // Load the 'neon' extension
-        conf.append("shared_preload_libraries", "neon");
+        conf.append("shared_preload_libraries", "neon,remotexact");
 
         // Multi-region configurations
         if let Some(multi_region) = &self.multi_region {
