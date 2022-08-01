@@ -293,6 +293,11 @@ impl Endpoint {
         conf.append("shared_preload_libraries", "neon,remotexact");
 
         // Multi-region configurations
+        conf.append("max_prepared_transactions", "64");
+        conf.append(
+            "remotexact.connstring",
+            &format!("postgresql://{}", &self.env.xactserver.listen_pg_addr),
+        );
         if let Some(multi_region) = &self.multi_region {
             let region_timelines = multi_region
                 .timeline_ids
