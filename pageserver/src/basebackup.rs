@@ -170,6 +170,7 @@ where
             SlruKind::Clog,
             SlruKind::MultiXactOffsets,
             SlruKind::MultiXactMembers,
+            SlruKind::Csn,
         ] {
             for segno in self.timeline.list_slru_segments(kind, self.lsn).await? {
                 self.add_slru_segment(kind, segno).await?;

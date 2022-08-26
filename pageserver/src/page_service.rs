@@ -646,12 +646,14 @@ impl PageServerHandler {
         &self,
         timeline: &Timeline,
         req: &PagestreamGetSlruPageRequest,
-    ) -> Result<PagestreamBeMessage> {
+    ) -> anyhow::Result<PagestreamBeMessage> {
         let latest_gc_cutoff_lsn = timeline.get_latest_gc_cutoff_lsn();
         let lsn = Self::wait_or_get_last_lsn(timeline, req.lsn, req.latest, &latest_gc_cutoff_lsn)
             .await?;
 
-        let seg_exists = timeline.get_slru_segment_exists(req.kind, req.segno, lsn)?;
+        let seg_exists = timeline
+            .get_slru_segment_exists(req.kind, req.segno, lsn)
+            .await?;
         let mut page = None;
 
         /*
@@ -660,7 +662,9 @@ impl PageServerHandler {
          * Hence, we don't return error here when the segment file does not exist.
          */
         if seg_exists {
-            let page_res = timeline.get_slru_page_at_lsn(req.kind, req.segno, req.blkno, lsn);
+            let page_res = timeline
+                .get_slru_page_at_lsn(req.kind, req.segno, req.blkno, lsn)
+                .await;
             if req.check_exists_only {
                 page = page_res.and(Ok(Bytes::default())).ok();
             } else {
@@ -806,18 +810,20 @@ impl postgres_backend_async::Handler for PageServerHandler {
             // multipagestream <tenant id as hex string> <timelineid>,<timelineid>,...
             let (_, params_raw) = query_string.split_at("multipagestream ".len());
             let params: Vec<_> = params_raw.split(' ').collect();
-            ensure!(
-                params.len() == 2,
-                "invalid param number for multipagestream command"
-            );
-
-            let tenant_id = TenantId::from_str(params[0])?;
+            if params.len() != 2 {
+                return Err(QueryError::Other(anyhow::anyhow!(
+                    "invalid param number for multipagestream command"
+                )));
+            }
+            let tenant_id = TenantId::from_str(params[0])
+                .with_context(|| format!("Failed to parse tenant id from {}", params[0]))?;
             self.check_permission(Some(tenant_id))?;
 
             let timeline_ids = params[1]
                 .split(',')
                 .map(TimelineId::from_str)
-                .collect::<Result<_, _>>()?;
+                .collect::<Result<_, _>>()
+                .with_context(|| format!("failed to parse timeline ids from {}", params[1]))?;
 
             self.handle_pagerequests(pgb, tenant_id, timeline_ids)
                 .await?;
