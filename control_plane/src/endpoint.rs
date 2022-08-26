@@ -292,7 +292,8 @@ impl Endpoint {
         // Load the 'neon' extension
         conf.append("shared_preload_libraries", "neon,remotexact");
 
-        // Multi-region configurations
+        // Remotexact: Multi-region configurations
+        conf.append("enable_csn_snapshot", "on");
         conf.append("max_prepared_transactions", "64");
         conf.append(
             "remotexact.connstring",
