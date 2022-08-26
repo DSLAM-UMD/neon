@@ -140,6 +140,7 @@ pub enum SlruKind {
     Clog,
     MultiXactMembers,
     MultiXactOffsets,
+    Csn,
 }
 
 impl SlruKind {
@@ -148,6 +149,7 @@ impl SlruKind {
             Self::Clog => "pg_xact",
             Self::MultiXactMembers => "pg_multixact/members",
             Self::MultiXactOffsets => "pg_multixact/offsets",
+            Self::Csn => "pg_csn",
         }
     }
 }
