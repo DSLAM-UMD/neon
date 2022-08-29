@@ -14,8 +14,10 @@
  */
 #include "postgres.h"
 
+#include "multiregion.h"
 #include "pagestore_client.h"
 #include "fmgr.h"
+#include "access/remotexact.h"
 #include "access/xlog.h"
 
 #include "libpq-fe.h"
@@ -64,7 +66,14 @@ pageserver_connect()
 				 errdetail_internal("%s", msg)));
 	}
 
-	query = psprintf("pagestream %s %s", neon_tenant, neon_timeline);
+	if (neon_multiregion_enabled())
+	{
+		neon_log(LOG, "multi-region enabled, timelines: %s", neon_region_timelines);
+		query = psprintf("multipagestream %s %s", neon_tenant, neon_region_timelines);
+	}
+	else
+		query = psprintf("pagestream %s %s", neon_tenant, neon_timeline);
+
 	ret = PQsendQuery(pageserver_conn, query);
 	if (ret != 1)
 	{
@@ -172,6 +181,10 @@ pageserver_send(NeonRequest * request)
 {
 	StringInfoData req_buff;
 
+	/* Fallback to the current region if the request region is unknown */
+	if (request->region == UNKNOWN_REGION)
+		request->region = current_region;
+
 	/* If the connection was lost for some reason, reconnect */
 	if (connected && PQstatus(pageserver_conn) == CONNECTION_BAD)
 	{
@@ -267,9 +280,15 @@ pageserver_flush(void)
 static NeonResponse *
 pageserver_call(NeonRequest * request)
 {
+	NeonResponse *resp;
+
 	pageserver_send(request);
 	pageserver_flush();
-	return pageserver_receive();
+	resp = pageserver_receive();
+
+	set_region_lsn(request->region, resp);
+
+	return resp;
 }
 
 page_server_api api = {
@@ -436,6 +455,25 @@ pg_init_libpagestore(void)
 							PGC_SIGHUP,
 							GUC_UNIT_MB,
 							NULL, NULL, NULL);
+	DefineCustomBoolVariable("neon.slru_clog",
+							 "read clog from the page server",
+							 NULL,
+							 &neon_slru_clog,
+							 false,
+							 PGC_POSTMASTER,
+							 0, /* no flags required */
+							 NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("neon.slru_multixact",
+							 "read multixact from the page server",
+							 NULL,
+							 &neon_slru_multixact,
+							 false,
+							 PGC_POSTMASTER,
+							 0, /* no flags required */
+							 NULL, NULL, NULL);
+
+	DefineMultiRegionCustomVariables();
 
 	relsize_hash_init();
 
@@ -465,4 +503,10 @@ pg_init_libpagestore(void)
 		smgr_init_hook = smgr_init_neon;
 		dbsize_hook = neon_dbsize;
 	}
+
+	slru_kind_check_hook = neon_slru_kind_check;
+	slru_read_page_hook = neon_slru_read_page;
+	slru_page_exists_hook = neon_slru_page_exists;
+
+	get_region_lsn_hook = get_region_lsn;
 }
