@@ -14,8 +14,10 @@
  */
 #include "postgres.h"
 
+#include "multiregion.h"
 #include "pagestore_client.h"
 #include "fmgr.h"
+#include "access/remotexact.h"
 #include "access/xlog.h"
 
 #include "libpq-fe.h"
@@ -52,6 +54,8 @@ char	   *neon_tenant;
 int32		max_cluster_size;
 char	   *page_server_connstring;
 char	   *neon_auth_token;
+bool		neon_slru_clog;
+bool		neon_slru_multixact;
 
 int			n_unflushed_requests = 0;
 int			flush_every_n_requests = 8;
@@ -110,7 +114,14 @@ pageserver_connect(int elevel)
 		return false;
 	}
 
-	query = psprintf("pagestream %s %s", neon_tenant, neon_timeline);
+	if (neon_multiregion_enabled())
+	{
+		neon_log(LOG, "multi-region enabled, timelines: %s", neon_region_timelines);
+		query = psprintf("multipagestream %s %s", neon_tenant, neon_region_timelines);
+	}
+	else
+		query = psprintf("pagestream %s %s", neon_tenant, neon_timeline);
+
 	ret = PQsendQuery(pageserver_conn, query);
 	if (ret != 1)
 	{
@@ -233,6 +244,10 @@ pageserver_send(NeonRequest * request)
 	StringInfoData req_buff;
 	int n_reconnect_attempts = 0;
 
+	/* Fallback to the current region if the request region is unknown */
+	if (request->region == UNKNOWN_REGION)
+		request->region = current_region;
+
 	/* If the connection was lost for some reason, reconnect */
 	if (connected && PQstatus(pageserver_conn) == CONNECTION_BAD)
 		pageserver_disconnect();
@@ -304,7 +319,7 @@ pageserver_send(NeonRequest * request)
 }
 
 static NeonResponse *
-pageserver_receive(void)
+pageserver_receive(int region)
 {
 	StringInfoData resp_buff;
 	NeonResponse *resp;
@@ -349,6 +364,8 @@ pageserver_receive(void)
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
+
+	set_region_lsn(region, resp);
 
 	return (NeonResponse *) resp;
 }
@@ -426,6 +443,7 @@ pg_init_libpagestore(void)
 							PGC_SIGHUP,
 							GUC_UNIT_MB,
 							NULL, NULL, NULL);
+
 	DefineCustomIntVariable("neon.flush_output_after",
 							"Flush the output buffer after every N unflushed requests",
 							NULL,
@@ -448,6 +466,26 @@ pg_init_libpagestore(void)
 							0,	/* no flags required */
 							NULL, (GucIntAssignHook) &readahead_buffer_resize, NULL);
 
+	DefineCustomBoolVariable("neon.slru_clog",
+							 "read clog from the page server",
+							 NULL,
+							 &neon_slru_clog,
+							 false,
+							 PGC_POSTMASTER,
+							 0, /* no flags required */
+							 NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("neon.slru_multixact",
+							 "read multixact from the page server",
+							 NULL,
+							 &neon_slru_multixact,
+							 false,
+							 PGC_POSTMASTER,
+							 0, /* no flags required */
+							 NULL, NULL, NULL);
+
+	DefineMultiRegionCustomVariables();
+
 	relsize_hash_init();
 
 	if (page_server != NULL)
@@ -469,4 +507,10 @@ pg_init_libpagestore(void)
 		dbsize_hook = neon_dbsize;
 	}
 	lfc_init();
+
+	slru_kind_check_hook = neon_slru_kind_check;
+	slru_read_page_hook = neon_slru_read_page;
+	slru_page_exists_hook = neon_slru_page_exists;
+
+	get_region_lsn_hook = get_region_lsn;
 }
