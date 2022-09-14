@@ -57,6 +57,7 @@ char	   *page_server_connstring;
 char	   *neon_auth_token;
 bool		neon_slru_clog;
 bool		neon_slru_multixact;
+bool		neon_slru_csnlog;
 
 int			readahead_buffer_size = 128;
 int			flush_every_n_requests = 8;
@@ -491,6 +492,15 @@ pg_init_libpagestore(void)
 							 "read multixact from the page server",
 							 NULL,
 							 &neon_slru_multixact,
+							 false,
+							 PGC_POSTMASTER,
+							 0, /* no flags required */
+							 NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("neon.slru_csnlog",
+							 "read csnlog from the page server",
+							 NULL,
+							 &neon_slru_csnlog,
 							 false,
 							 PGC_POSTMASTER,
 							 0, /* no flags required */
