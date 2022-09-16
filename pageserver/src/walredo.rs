@@ -53,7 +53,6 @@ use postgres_ffi::v14::nonrelfile_utils::{
     transaction_id_set_status, transaction_id_set_csn,
 };
 use postgres_ffi::BLCKSZ;
-use postgres_ffi::pg_constants::AbortedXidCSN;
 
 ///
 /// `RelTag` + block number (`blknum`) gives us a unique id of the page in the cluster.
@@ -553,8 +552,6 @@ impl PostgresRedoManager {
                     );
                     transaction_id_set_csn(xid, *lsn, page);
                 }
-
-
             }
             NeonWalRecord::CsnLogSetAborted { xids } => {
                 let (slru_kind, segno, blknum) =
@@ -585,7 +582,7 @@ impl PostgresRedoManager {
                         key
                     );
 
-                    transaction_id_set_csn(xid, AbortedXidCSN, page);
+                    transaction_id_set_csn(xid, pg_constants::AbortedXidCSN, page);
                 }
             }
         }
