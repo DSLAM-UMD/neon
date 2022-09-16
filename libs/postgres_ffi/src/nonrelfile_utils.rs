@@ -2,7 +2,7 @@
 //! Common utilities for dealing with PostgreSQL non-relation files.
 //!
 use super::{pg_constants, xlog_utils::XidCSN};
-use crate::transaction_id_precedes;
+use crate::{transaction_id_precedes};
 use byteorder::{LittleEndian, ByteOrder};
 use bytes::BytesMut;
 use log::*;
@@ -39,9 +39,8 @@ pub fn transaction_id_set_csn(xid: u32, csn: XidCSN, page: &mut BytesMut) {
     trace!("handle_apply_csn_request for RM_XACT_ID-{}", csn);
 
     let entryno: usize = (xid as usize % pg_constants::CSN_LOG_XACTS_PER_PAGE as usize) as usize;
-    let csnsize: usize = (std::mem::size_of::<XidCSN>()) as usize;
-    let bytebegin: usize = (entryno * csnsize) as usize;
-    let byteend: usize = (bytebegin + csnsize) as usize;
+    let bytebegin: usize = (entryno * pg_constants::CSN_SIZE as usize) as usize;
+    let byteend: usize = (bytebegin + pg_constants::CSN_SIZE as usize) as usize;
 
     LittleEndian::write_u64(&mut page[bytebegin..byteend], csn);
 }
