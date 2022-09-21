@@ -23,7 +23,7 @@
 
 use anyhow::Context;
 use postgres_ffi::v14::nonrelfile_utils::clogpage_precedes;
-use postgres_ffi::v14::nonrelfile_utils::slru_may_delete_clogsegment;
+use postgres_ffi::v14::nonrelfile_utils::slru_may_delete_segment;
 use postgres_ffi::v14::nonrelfile_utils::csnlogpage_precedes;
 use postgres_ffi::{fsm_logical_to_physical, page_is_new, page_set_lsn};
 
