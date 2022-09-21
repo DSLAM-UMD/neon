@@ -110,8 +110,6 @@ postgres-%: postgres-configure-% \
 	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$*/contrib/pageinspect install
 	+@echo "Compiling amcheck $*"
 	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$*/contrib/amcheck install
-	+@echo "Compiling remotexact $*"
-	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$*/contrib/remotexact install
 
 .PHONY: postgres-clean-%
 postgres-clean-%:
@@ -147,6 +145,11 @@ neon-pg-ext-%: postgres-%
 	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/$*/bin/pg_config CFLAGS='$(PG_CFLAGS) $(COPT)' \
 		-C $(POSTGRES_INSTALL_DIR)/build/hnsw-$* \
 		-f $(ROOT_PROJECT_DIR)/pgxn/hnsw/Makefile install
+	+@echo "Compiling remotexact $*"
+	mkdir -p $(POSTGRES_INSTALL_DIR)/build/remotexact-$*
+	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/$*/bin/pg_config CFLAGS='$(PG_CFLAGS) $(COPT)' \
+		-C $(POSTGRES_INSTALL_DIR)/build/neon-utils-$* \
+		-f $(ROOT_PROJECT_DIR)/pgxn/remotexact/Makefile install
 
 .PHONY: neon-pg-ext-clean-%
 neon-pg-ext-clean-%:
@@ -165,6 +168,9 @@ neon-pg-ext-clean-%:
 	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/$*/bin/pg_config \
 	-C $(POSTGRES_INSTALL_DIR)/build/hnsw-$* \
 	-f $(ROOT_PROJECT_DIR)/pgxn/hnsw/Makefile clean
+	$(MAKE) PG_CONFIG=$(POSTGRES_INSTALL_DIR)/$*/bin/pg_config \
+	-C $(POSTGRES_INSTALL_DIR)/build/remotexact-$* \
+	-f $(ROOT_PROJECT_DIR)/pgxn/remotexact/Makefile clean
 
 .PHONY: neon-pg-ext
 neon-pg-ext: \
