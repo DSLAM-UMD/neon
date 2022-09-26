@@ -139,6 +139,7 @@ struct PagestreamErrorResponse {
 
 #[derive(Debug)]
 struct PagestreamDbSizeResponse {
+    lsn: Lsn,
     db_size: i64,
 }
 
@@ -249,6 +250,7 @@ impl PagestreamBeMessage {
             }
             Self::DbSize(resp) => {
                 bytes.put_u8(104); /* tag from pagestore_client.h */
+                bytes.put_u64(resp.lsn.0);
                 bytes.put_i64(resp.db_size);
             }
         }
@@ -792,6 +794,7 @@ impl PageServerHandler {
         let db_size = total_blocks as i64 * BLCKSZ as i64;
 
         Ok(PagestreamBeMessage::DbSize(PagestreamDbSizeResponse {
+            lsn,
             db_size,
         }))
     }
