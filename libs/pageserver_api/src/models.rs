@@ -640,6 +640,7 @@ pub struct PagestreamErrorResponse {
 
 #[derive(Debug)]
 pub struct PagestreamDbSizeResponse {
+    pub lsn: Lsn,
     pub db_size: i64,
 }
 
@@ -810,6 +811,7 @@ impl PagestreamBeMessage {
             }
             Self::DbSize(resp) => {
                 bytes.put_u8(105); /* tag from pagestore_client.h */
+                bytes.put_u64(resp.lsn.0);
                 bytes.put_i64(resp.db_size);
             }
         }
