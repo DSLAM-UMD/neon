@@ -47,7 +47,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
-use utils::id::{NodeId, TenantId, TimelineId};
+use utils::id::{NodeId, RegionId, TenantId, TimelineId};
 
 use crate::local_env::LocalEnv;
 use crate::pageserver::PageServerNode;
@@ -70,7 +70,7 @@ pub struct EndpointConf {
     http_port: u16,
     pg_version: u32,
     skip_pg_catalog_updates: bool,
-    multi_region: Option<MultiRegion>,
+    region_id: RegionId,
 }
 
 //
@@ -126,28 +126,10 @@ impl ComputeControlPlane {
         http_port: Option<u16>,
         pg_version: u32,
         mode: ComputeMode,
-        region_timeline_ids: Option<Vec<TimelineId>>,
+        region_id: RegionId,
     ) -> Result<Arc<Endpoint>> {
         let pg_port = pg_port.unwrap_or_else(|| self.get_port());
         let http_port = http_port.unwrap_or_else(|| self.get_port() + 1);
-
-        let multi_region = region_timeline_ids
-            .map(|timeline_ids| -> Result<_> {
-                let current_region = timeline_ids
-                    .iter()
-                    .position(|&id| id == timeline_id)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Found no timeline id '{}' in the list of region timeline ids",
-                            timeline_id
-                        )
-                    })?;
-                Ok(MultiRegion {
-                    timeline_ids,
-                    current_region,
-                })
-            })
-            .transpose()?;
 
         let ep = Arc::new(Endpoint {
             endpoint_id: endpoint_id.to_owned(),
@@ -160,7 +142,7 @@ impl ComputeControlPlane {
             tenant_id,
             pg_version,
             skip_pg_catalog_updates: false,
-            multi_region: multi_region.clone(),
+            region_id,
         });
 
         ep.create_endpoint_dir()?;
@@ -175,7 +157,7 @@ impl ComputeControlPlane {
                 pg_port,
                 pg_version,
                 skip_pg_catalog_updates: false,
-                multi_region,
+                region_id,
             })?,
         )?;
         std::fs::write(
@@ -191,12 +173,6 @@ impl ComputeControlPlane {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-struct MultiRegion {
-    timeline_ids: Vec<TimelineId>,
-    current_region: usize,
-}
 
 #[derive(Debug)]
 pub struct Endpoint {
@@ -221,7 +197,7 @@ pub struct Endpoint {
     // Optimizations
     skip_pg_catalog_updates: bool,
 
-    multi_region: Option<MultiRegion>,
+    region_id: RegionId,
 }
 
 impl Endpoint {
@@ -256,7 +232,7 @@ impl Endpoint {
             tenant_id: conf.tenant_id,
             pg_version: conf.pg_version,
             skip_pg_catalog_updates: conf.skip_pg_catalog_updates,
-            multi_region: conf.multi_region,
+            region_id: conf.region_id,
         })
     }
 
@@ -299,16 +275,7 @@ impl Endpoint {
             "remotexact.connstring",
             &format!("postgresql://{}", &self.env.xactserver.listen_pg_addr),
         );
-        if let Some(multi_region) = &self.multi_region {
-            let region_timelines = multi_region
-                .timeline_ids
-                .iter()
-                .map(TimelineId::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            conf.append("neon.region_timelines", &region_timelines);
-            conf.append("current_region", &multi_region.current_region.to_string());
-        }
+        conf.append("current_region", &self.region_id.to_string());
 
         conf.append_line("");
         // Replication-related configurations, such as WAL sending

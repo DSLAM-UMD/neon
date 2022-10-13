@@ -338,6 +338,7 @@ async fn timeline_create_handler(
             request_data.ancestor_start_lsn,
             request_data.pg_version.unwrap_or(crate::DEFAULT_PG_VERSION),
             state.broker_client.clone(),
+            request_data.region_id.unwrap_or_default(),
             &ctx,
         )
         .await {
