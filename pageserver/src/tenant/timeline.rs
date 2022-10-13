@@ -66,7 +66,7 @@ use postgres_connection::PgConnectionConfig;
 use postgres_ffi::to_pg_timestamp;
 use utils::{
     completion,
-    id::{TenantId, TimelineId},
+    id::{RegionId, TenantId, TimelineId},
     lsn::{AtomicLsn, Lsn, RecordLsn},
     seqwait::SeqWait,
     simple_rcu::{Rcu, RcuReadGuard},
@@ -299,6 +299,9 @@ pub struct Timeline {
     /// Load or creation time information about the disk_consistent_lsn and when the loading
     /// happened. Used for consumption metrics.
     pub(crate) loaded_at: (Lsn, SystemTime),
+
+    /// Region id
+    pub region_id: RegionId,
 }
 
 pub struct WalReceiverInfo {
@@ -1470,6 +1473,8 @@ impl Timeline {
 
                 initial_logical_size_can_start,
                 initial_logical_size_attempt: Mutex::new(initial_logical_size_attempt),
+
+                region_id: metadata.region_id(),
             };
             result.repartition_threshold =
                 result.get_checkpoint_distance() / REPARTITION_FREQ_IN_CHECKPOINT_DISTANCE;
@@ -2907,6 +2912,7 @@ impl Timeline {
             *self.latest_gc_cutoff_lsn.read(),
             self.initdb_lsn,
             self.pg_version,
+            self.region_id,
         );
 
         fail_point!("checkpoint-before-saving-metadata", |x| bail!(

@@ -11,7 +11,7 @@ use strum_macros;
 use utils::{
     completion,
     history_buffer::HistoryBufferWithDropCounter,
-    id::{NodeId, TenantId, TimelineId},
+    id::{NodeId, RegionId, TenantId, TimelineId},
     lsn::Lsn,
 };
 
@@ -186,6 +186,9 @@ pub struct TimelineCreateRequest {
     #[serde_as(as = "Option<DisplayFromStr>")]
     pub ancestor_start_lsn: Option<Lsn>,
     pub pg_version: Option<u32>,
+    #[serde(default)]
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    pub region_id: Option<RegionId>,
 }
 
 #[serde_as]

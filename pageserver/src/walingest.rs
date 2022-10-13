@@ -328,11 +328,12 @@ impl<'a> WalIngest<'a> {
                     segno,
                     rpageno,
                     ZERO_PAGE.clone(),
+                    ctx,
                 )
                 .await?;
             } else if info == pg_constants::XLOG_CSN_TRUNCATE {
                 let pageno: u32 = buf.get_u32_le();
-                self.ingest_csnlog_truncate_record(modification, pageno)
+                self.ingest_csnlog_truncate_record(modification, pageno, ctx)
                     .await?;
             }
             // We don't handle assignment and set records to avoid the
@@ -1070,6 +1071,7 @@ impl<'a> WalIngest<'a> {
         &mut self,
         modification: &mut DatadirModification<'_>,
         pageno: u32,
+        ctx: &RequestContext,
     ) -> Result<()> {
         info!("XLOG_CSN_TRUNCATE truncate pageno {} ", pageno);
 
@@ -1093,12 +1095,14 @@ impl<'a> WalIngest<'a> {
         let req_lsn = modification.tline.get_last_record_lsn();
         for segno in modification
             .tline
-            .list_slru_segments(SlruKind::Csn, req_lsn)
+            .list_slru_segments(SlruKind::Csn, req_lsn, ctx)
             .await?
         {
             let segpage = segno * pg_constants::SLRU_PAGES_PER_SEGMENT;
             if slru_may_delete_segment(segpage, pageno) {
-                modification.drop_slru_segment(SlruKind::Csn, segno).await?;
+                modification
+                    .drop_slru_segment(SlruKind::Csn, segno, ctx)
+                    .await?;
                 trace!("Drop Csn segment {:>04X}", segno);
             }
         }
@@ -1292,6 +1296,7 @@ mod tests {
     use crate::tenant::Timeline;
     use postgres_ffi::v14::xlog_utils::SIZEOF_CHECKPOINT;
     use postgres_ffi::RELSEG_SIZE;
+    use utils::id::RegionId;
 
     use crate::DEFAULT_PG_VERSION;
 
@@ -1326,7 +1331,7 @@ mod tests {
     async fn test_relsize() -> Result<()> {
         let (tenant, ctx) = TenantHarness::create("test_relsize")?.load().await;
         let tline = tenant
-            .create_test_timeline(TIMELINE_ID, Lsn(8), DEFAULT_PG_VERSION, &ctx)
+            .create_test_timeline(TIMELINE_ID, Lsn(8), DEFAULT_PG_VERSION, RegionId(0), &ctx)
             .await?;
         let mut walingest = init_walingest_test(&tline, &ctx).await?;
 
@@ -1547,7 +1552,7 @@ mod tests {
     async fn test_drop_extend() -> Result<()> {
         let (tenant, ctx) = TenantHarness::create("test_drop_extend")?.load().await;
         let tline = tenant
-            .create_test_timeline(TIMELINE_ID, Lsn(8), DEFAULT_PG_VERSION, &ctx)
+            .create_test_timeline(TIMELINE_ID, Lsn(8), DEFAULT_PG_VERSION, RegionId(0), &ctx)
             .await?;
         let mut walingest = init_walingest_test(&tline, &ctx).await?;
 
@@ -1618,7 +1623,7 @@ mod tests {
     async fn test_truncate_extend() -> Result<()> {
         let (tenant, ctx) = TenantHarness::create("test_truncate_extend")?.load().await;
         let tline = tenant
-            .create_test_timeline(TIMELINE_ID, Lsn(8), DEFAULT_PG_VERSION, &ctx)
+            .create_test_timeline(TIMELINE_ID, Lsn(8), DEFAULT_PG_VERSION, RegionId(0), &ctx)
             .await?;
         let mut walingest = init_walingest_test(&tline, &ctx).await?;
 
@@ -1760,7 +1765,7 @@ mod tests {
     async fn test_large_rel() -> Result<()> {
         let (tenant, ctx) = TenantHarness::create("test_large_rel")?.load().await;
         let tline = tenant
-            .create_test_timeline(TIMELINE_ID, Lsn(8), DEFAULT_PG_VERSION, &ctx)
+            .create_test_timeline(TIMELINE_ID, Lsn(8), DEFAULT_PG_VERSION, RegionId(0), &ctx)
             .await?;
         let mut walingest = init_walingest_test(&tline, &ctx).await?;
 
