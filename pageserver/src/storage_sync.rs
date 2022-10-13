@@ -1462,6 +1462,7 @@ mod test_utils {
             // Any version will do
             // but it should be consistent with the one in the tests
             crate::DEFAULT_PG_VERSION,
+            utils::id::RegionId(0),
         )
     }
 }

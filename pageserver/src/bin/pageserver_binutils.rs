@@ -119,6 +119,7 @@ fn handle_metadata(path: &Path, arg_matches: &clap::ArgMatches) -> Result<(), an
             meta.latest_gc_cutoff_lsn(),
             meta.initdb_lsn(),
             meta.pg_version(),
+            meta.region_id(),
         );
         update_meta = true;
     }
@@ -131,6 +132,7 @@ fn handle_metadata(path: &Path, arg_matches: &clap::ArgMatches) -> Result<(), an
             meta.latest_gc_cutoff_lsn(),
             meta.initdb_lsn(),
             meta.pg_version(),
+            meta.region_id(),
         );
         update_meta = true;
     }
