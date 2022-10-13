@@ -58,7 +58,7 @@ use pageserver_api::reltag::RelTag;
 use postgres_connection::PgConnectionConfig;
 use postgres_ffi::to_pg_timestamp;
 use utils::{
-    id::{TenantId, TimelineId},
+    id::{RegionId, TenantId, TimelineId},
     lsn::{AtomicLsn, Lsn, RecordLsn},
     seqwait::SeqWait,
     simple_rcu::{Rcu, RcuReadGuard},
@@ -226,6 +226,9 @@ pub struct Timeline {
     state: watch::Sender<TimelineState>,
 
     eviction_task_timeline_state: tokio::sync::Mutex<EvictionTaskTimelineState>,
+
+    /// Region id
+    pub region_id: RegionId,
 }
 
 /// Internal structure to hold all data needed for logical size calculation.
@@ -1367,6 +1370,8 @@ impl Timeline {
                 eviction_task_timeline_state: tokio::sync::Mutex::new(
                     EvictionTaskTimelineState::default(),
                 ),
+
+                region_id: metadata.region_id(),
             };
             result.repartition_threshold = result.get_checkpoint_distance() / 10;
             result
@@ -2674,6 +2679,7 @@ impl Timeline {
             *self.latest_gc_cutoff_lsn.read(),
             self.initdb_lsn,
             self.pg_version,
+            self.region_id,
         );
 
         fail_point!("checkpoint-before-saving-metadata", |x| bail!(

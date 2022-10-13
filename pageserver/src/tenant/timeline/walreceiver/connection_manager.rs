@@ -794,6 +794,7 @@ mod tests {
     use super::*;
     use crate::tenant::harness::{TenantHarness, TIMELINE_ID};
     use url::Host;
+    use utils::id::RegionId;
 
     fn dummy_broker_sk_timeline(
         commit_lsn: u64,
@@ -1217,7 +1218,13 @@ mod tests {
     async fn dummy_state(harness: &TenantHarness<'_>) -> ConnectionManagerState {
         let (tenant, ctx) = harness.load().await;
         let timeline = tenant
-            .create_empty_timeline(TIMELINE_ID, Lsn(0), crate::DEFAULT_PG_VERSION, &ctx)
+            .create_empty_timeline(
+                TIMELINE_ID,
+                Lsn(0),
+                crate::DEFAULT_PG_VERSION,
+                RegionId(0),
+                &ctx,
+            )
             .expect("Failed to create an empty timeline for dummy wal connection manager");
         let timeline = timeline.initialize(&ctx).unwrap();
 

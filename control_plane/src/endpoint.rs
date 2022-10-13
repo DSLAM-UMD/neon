@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use utils::{
-    id::{TenantId, TimelineId},
+    id::{RegionId, TenantId, TimelineId},
     lsn::Lsn,
 };
 
@@ -71,7 +71,7 @@ impl ComputeControlPlane {
         lsn: Option<Lsn>,
         port: Option<u16>,
         pg_version: u32,
-        region_timeline_ids: Option<Vec<TimelineId>>,
+        region_id: RegionId,
     ) -> Result<Arc<Endpoint>> {
         let port = port.unwrap_or_else(|| self.get_port());
 
@@ -102,7 +102,7 @@ impl ComputeControlPlane {
             lsn,
             tenant_id,
             pg_version,
-            multi_region,
+            region_id,
         });
 
         ep.create_pgdata()?;
@@ -139,7 +139,7 @@ pub struct Endpoint {
     // the endpoint runs in.
     pub env: LocalEnv,
     pageserver: Arc<PageServerNode>,
-    multi_region: Option<MultiRegion>,
+    region_id: RegionId,
 }
 
 impl Endpoint {
@@ -174,7 +174,9 @@ impl Endpoint {
         let tenant_id: TenantId = conf.parse_field("neon.tenant_id", &context)?;
 
         let region_timelines = conf.parse_field("neon.region_timelines", &context);
-        let current_region = conf.parse_field("current_region", &context);
+        let current_region = conf
+            .parse_field("current_region", &context)
+            .unwrap_or_default();
 
         // Read postgres version from PG_VERSION file to determine which postgres version binary to use.
         // If it doesn't exist, assume broken data directory and use default pg version.
@@ -188,22 +190,6 @@ impl Endpoint {
         let recovery_target_lsn: Option<Lsn> =
             conf.parse_field_optional("recovery_target_lsn", &context)?;
 
-        let multi_region = current_region
-            .and_then(|current_region| {
-                region_timelines.and_then(|timelines: String| {
-                    Ok(MultiRegion {
-                        current_region,
-                        timeline_ids: timelines
-                            .split(',')
-                            .map(|s| -> Result<_> {
-                                TimelineId::from_str(s).map_err(anyhow::Error::from)
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                    })
-                })
-            })
-            .ok();
-
         // ok now
         Ok(Endpoint {
             address: SocketAddr::new("127.0.0.1".parse().unwrap(), port),
@@ -214,7 +200,7 @@ impl Endpoint {
             lsn: recovery_target_lsn,
             tenant_id,
             pg_version,
-            multi_region,
+            region_id: current_region,
         })
     }
 
@@ -401,16 +387,7 @@ impl Endpoint {
             "remotexact.connstring",
             &format!("postgresql://{}", &self.env.xactserver.listen_pg_addr),
         );
-        if let Some(multi_region) = &self.multi_region {
-            let region_timelines = multi_region
-                .timeline_ids
-                .iter()
-                .map(TimelineId::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
-            conf.append("neon.region_timelines", &region_timelines);
-            conf.append("current_region", &multi_region.current_region.to_string());
-        }
+        conf.append("current_region", &self.region_id.to_string());
 
         let mut file = File::create(self.pgdata().join("postgresql.conf"))?;
         file.write_all(conf.to_string().as_bytes())?;
