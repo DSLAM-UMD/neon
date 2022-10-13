@@ -18,7 +18,7 @@ use thiserror::Error;
 use utils::auth::{Claims, Scope};
 use utils::{
     http::error::HttpErrorBody,
-    id::{TenantId, TimelineId},
+    id::{RegionId, TenantId, TimelineId},
     lsn::Lsn,
     postgres_backend::AuthType,
 };
@@ -166,7 +166,12 @@ impl PageServerNode {
             })?;
 
         let init_result = self
-            .try_init_timeline(create_tenant, initial_timeline_id, pg_version)
+            .try_init_timeline(
+                create_tenant,
+                initial_timeline_id,
+                pg_version,
+                RegionId::default(),
+            )
             .context("Failed to create initial tenant and timeline for pageserver");
         match &init_result {
             Ok(initial_timeline_id) => {
@@ -197,6 +202,7 @@ impl PageServerNode {
         new_tenant_id: Option<TenantId>,
         new_timeline_id: Option<TimelineId>,
         pg_version: u32,
+        region_id: RegionId,
     ) -> anyhow::Result<TimelineId> {
         let initial_tenant_id = self.tenant_create(new_tenant_id, HashMap::new())?;
         let initial_timeline_info = self.timeline_create(
@@ -205,6 +211,7 @@ impl PageServerNode {
             None,
             None,
             Some(pg_version),
+            Some(region_id),
         )?;
         Ok(initial_timeline_info.timeline_id)
     }
@@ -514,6 +521,7 @@ impl PageServerNode {
         ancestor_start_lsn: Option<Lsn>,
         ancestor_timeline_id: Option<TimelineId>,
         pg_version: Option<u32>,
+        region_id: Option<RegionId>,
     ) -> anyhow::Result<TimelineInfo> {
         self.http_request(
             Method::POST,
@@ -524,6 +532,7 @@ impl PageServerNode {
             ancestor_start_lsn,
             ancestor_timeline_id,
             pg_version,
+            region_id,
         })
         .send()?
         .error_from_body()?
