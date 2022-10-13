@@ -50,7 +50,7 @@ pub use pageserver_api::models::TenantState;
 use toml_edit;
 use utils::{
     crashsafe_dir,
-    id::{TenantId, TimelineId},
+    id::{RegionId, TenantId, TimelineId},
     lsn::{Lsn, RecordLsn},
 };
 
@@ -162,6 +162,7 @@ impl Tenant {
         new_timeline_id: TimelineId,
         initdb_lsn: Lsn,
         pg_version: u32,
+        region_id: RegionId,
     ) -> Result<Arc<Timeline>> {
         // XXX: keep the lock to avoid races during timeline creation
         let mut timelines = self.timelines.lock().unwrap();
@@ -184,6 +185,7 @@ impl Tenant {
             initdb_lsn,
             initdb_lsn,
             pg_version,
+            region_id,
         );
         let new_timeline =
             self.create_initialized_timeline(new_timeline_id, new_metadata, &mut timelines)?;
@@ -205,6 +207,7 @@ impl Tenant {
         ancestor_timeline_id: Option<TimelineId>,
         mut ancestor_start_lsn: Option<Lsn>,
         pg_version: u32,
+        region_id: RegionId,
     ) -> Result<Option<Arc<Timeline>>> {
         let new_timeline_id = new_timeline_id.unwrap_or_else(TimelineId::generate);
 
@@ -245,9 +248,14 @@ impl Tenant {
                     }
                 }
 
-                self.branch_timeline(ancestor_timeline_id, new_timeline_id, ancestor_start_lsn)?
+                self.branch_timeline(
+                    ancestor_timeline_id,
+                    new_timeline_id,
+                    ancestor_start_lsn,
+                    region_id,
+                )?
             }
-            None => self.bootstrap_timeline(new_timeline_id, pg_version)?,
+            None => self.bootstrap_timeline(new_timeline_id, pg_version, region_id)?,
         };
 
         // Have added new timeline into the tenant, now its background tasks are needed.
@@ -914,6 +922,7 @@ impl Tenant {
         src: TimelineId,
         dst: TimelineId,
         start_lsn: Option<Lsn>,
+        region_id: RegionId,
     ) -> Result<Arc<Timeline>> {
         // We need to hold this lock to prevent GC from starting at the same time. GC scans the directory to learn
         // about timelines, so otherwise a race condition is possible, where we create new timeline and GC
@@ -987,6 +996,7 @@ impl Tenant {
             *src_timeline.latest_gc_cutoff_lsn.read(), // FIXME: should we hold onto this guard longer?
             src_timeline.initdb_lsn,
             src_timeline.pg_version,
+            region_id,
         );
         let new_timeline = self.create_initialized_timeline(dst, metadata, &mut timelines)?;
         info!("branched timeline {dst} from {src} at {start_lsn}");
@@ -1000,6 +1010,7 @@ impl Tenant {
         &self,
         timeline_id: TimelineId,
         pg_version: u32,
+        region_id: RegionId,
     ) -> Result<Arc<Timeline>> {
         // create a `tenant/{tenant_id}/timelines/basebackup-{timeline_id}.{TEMP_FILE_SUFFIX}/`
         // temporary directory for basebackup files for the given timeline.
@@ -1020,7 +1031,7 @@ impl Tenant {
         // LSN, and any WAL after that.
         // Initdb lsn will be equal to last_record_lsn which will be set after import.
         // Because we know it upfront avoid having an option or dummy zero value by passing it to create_empty_timeline.
-        let timeline = self.create_empty_timeline(timeline_id, lsn, pg_version)?;
+        let timeline = self.create_empty_timeline(timeline_id, lsn, pg_version, region_id)?;
         import_datadir::import_timeline_from_postgres_datadir(&pgdata_path, &*timeline, lsn)?;
 
         fail::fail_point!("before-checkpoint-new-timeline", |_| {
@@ -1379,7 +1390,8 @@ mod tests {
     #[test]
     fn test_basic() -> Result<()> {
         let tenant = TenantHarness::create("test_basic")?.load();
-        let tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let tline =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
 
         let writer = tline.writer();
         writer.put(*TEST_KEY, Lsn(0x10), &Value::Image(TEST_IMG("foo at 0x10")))?;
@@ -1401,9 +1413,10 @@ mod tests {
     #[test]
     fn no_duplicate_timelines() -> Result<()> {
         let tenant = TenantHarness::create("no_duplicate_timelines")?.load();
-        let _ = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let _ =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
 
-        match tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION) {
+        match tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0)) {
             Ok(_) => panic!("duplicate timeline creation should fail"),
             Err(e) => assert_eq!(
                 e.to_string(),
@@ -1427,7 +1440,8 @@ mod tests {
     #[test]
     fn test_branch() -> Result<()> {
         let tenant = TenantHarness::create("test_branch")?.load();
-        let tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let tline =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
         let writer = tline.writer();
         use std::str::from_utf8;
 
@@ -1449,7 +1463,7 @@ mod tests {
         //assert_current_logical_size(&tline, Lsn(0x40));
 
         // Branch the history, modify relation differently on the new timeline
-        tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x30)))?;
+        tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x30)), RegionId(0))?;
         let newtline = tenant
             .get_timeline(NEW_TIMELINE_ID)
             .expect("Should have a local timeline");
@@ -1522,7 +1536,8 @@ mod tests {
         let tenant =
             TenantHarness::create("test_prohibit_branch_creation_on_garbage_collected_data")?
                 .load();
-        let tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let tline =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
         make_some_layers(tline.as_ref(), Lsn(0x20))?;
 
         // this removes layers before lsn 40 (50 minus 10), so there are two remaining layers, image and delta for 31-50
@@ -1532,7 +1547,7 @@ mod tests {
         tenant.gc_iteration(Some(TIMELINE_ID), 0x10, Duration::ZERO, false)?;
 
         // try to branch at lsn 25, should fail because we already garbage collected the data
-        match tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x25))) {
+        match tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x25)), RegionId(0)) {
             Ok(_) => panic!("branching should have failed"),
             Err(err) => {
                 assert!(err.to_string().contains("invalid branch start lsn"));
@@ -1552,9 +1567,9 @@ mod tests {
         let tenant =
             TenantHarness::create("test_prohibit_branch_creation_on_pre_initdb_lsn")?.load();
 
-        tenant.create_empty_timeline(TIMELINE_ID, Lsn(0x50), DEFAULT_PG_VERSION)?;
+        tenant.create_empty_timeline(TIMELINE_ID, Lsn(0x50), DEFAULT_PG_VERSION, RegionId(0))?;
         // try to branch at lsn 0x25, should fail because initdb lsn is 0x50
-        match tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x25))) {
+        match tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x25)), RegionId(0)) {
             Ok(_) => panic!("branching should have failed"),
             Err(err) => {
                 assert!(&err.to_string().contains("invalid branch start lsn"));
@@ -1596,10 +1611,11 @@ mod tests {
     fn test_retain_data_in_parent_which_is_needed_for_child() -> Result<()> {
         let tenant =
             TenantHarness::create("test_retain_data_in_parent_which_is_needed_for_child")?.load();
-        let tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let tline =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
         make_some_layers(tline.as_ref(), Lsn(0x20))?;
 
-        tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x40)))?;
+        tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x40)), RegionId(0))?;
         let newtline = tenant
             .get_timeline(NEW_TIMELINE_ID)
             .expect("Should have a local timeline");
@@ -1613,10 +1629,11 @@ mod tests {
     fn test_parent_keeps_data_forever_after_branching() -> Result<()> {
         let tenant =
             TenantHarness::create("test_parent_keeps_data_forever_after_branching")?.load();
-        let tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let tline =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
         make_some_layers(tline.as_ref(), Lsn(0x20))?;
 
-        tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x40)))?;
+        tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x40)), RegionId(0))?;
         let newtline = tenant
             .get_timeline(NEW_TIMELINE_ID)
             .expect("Should have a local timeline");
@@ -1641,8 +1658,12 @@ mod tests {
         let harness = TenantHarness::create(TEST_NAME)?;
         {
             let tenant = harness.load();
-            let tline =
-                tenant.create_empty_timeline(TIMELINE_ID, Lsn(0x8000), DEFAULT_PG_VERSION)?;
+            let tline = tenant.create_empty_timeline(
+                TIMELINE_ID,
+                Lsn(0x8000),
+                DEFAULT_PG_VERSION,
+                RegionId(0),
+            )?;
             make_some_layers(tline.as_ref(), Lsn(0x8000))?;
             tline.checkpoint(CheckpointConfig::Forced)?;
         }
@@ -1662,12 +1683,17 @@ mod tests {
         // create two timelines
         {
             let tenant = harness.load();
-            let tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+            let tline = tenant.create_empty_timeline(
+                TIMELINE_ID,
+                Lsn(0),
+                DEFAULT_PG_VERSION,
+                RegionId(0),
+            )?;
 
             make_some_layers(tline.as_ref(), Lsn(0x20))?;
             tline.checkpoint(CheckpointConfig::Forced)?;
 
-            tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x40)))?;
+            tenant.branch_timeline(TIMELINE_ID, NEW_TIMELINE_ID, Some(Lsn(0x40)), RegionId(0))?;
 
             let newtline = tenant
                 .get_timeline(NEW_TIMELINE_ID)
@@ -1698,7 +1724,7 @@ mod tests {
         let harness = TenantHarness::create(TEST_NAME)?;
         let tenant = harness.load();
 
-        tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
         drop(tenant);
 
         let metadata_path = harness.timeline_path(&TIMELINE_ID).join(METADATA_FILE_NAME);
@@ -1735,7 +1761,8 @@ mod tests {
     #[test]
     fn test_images() -> Result<()> {
         let tenant = TenantHarness::create("test_images")?.load();
-        let tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let tline =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
 
         let writer = tline.writer();
         writer.put(*TEST_KEY, Lsn(0x10), &Value::Image(TEST_IMG("foo at 0x10")))?;
@@ -1785,7 +1812,8 @@ mod tests {
     #[test]
     fn test_bulk_insert() -> Result<()> {
         let tenant = TenantHarness::create("test_bulk_insert")?.load();
-        let tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let tline =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
 
         let mut lsn = Lsn(0x10);
 
@@ -1825,7 +1853,8 @@ mod tests {
     #[test]
     fn test_random_updates() -> Result<()> {
         let tenant = TenantHarness::create("test_random_updates")?.load();
-        let tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let tline =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
 
         const NUM_KEYS: usize = 1000;
 
@@ -1895,7 +1924,8 @@ mod tests {
     #[test]
     fn test_traverse_branches() -> Result<()> {
         let tenant = TenantHarness::create("test_traverse_branches")?.load();
-        let mut tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let mut tline =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
 
         const NUM_KEYS: usize = 1000;
 
@@ -1928,7 +1958,7 @@ mod tests {
         let mut tline_id = TIMELINE_ID;
         for _ in 0..50 {
             let new_tline_id = TimelineId::generate();
-            tenant.branch_timeline(tline_id, new_tline_id, Some(lsn))?;
+            tenant.branch_timeline(tline_id, new_tline_id, Some(lsn), RegionId(0))?;
             tline = tenant
                 .get_timeline(new_tline_id)
                 .expect("Should have the branched timeline");
@@ -1974,7 +2004,8 @@ mod tests {
     #[test]
     fn test_traverse_ancestors() -> Result<()> {
         let tenant = TenantHarness::create("test_traverse_ancestors")?.load();
-        let mut tline = tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION)?;
+        let mut tline =
+            tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0))?;
 
         const NUM_KEYS: usize = 100;
         const NUM_TLINES: usize = 50;
@@ -1989,7 +2020,7 @@ mod tests {
         #[allow(clippy::needless_range_loop)]
         for idx in 0..NUM_TLINES {
             let new_tline_id = TimelineId::generate();
-            tenant.branch_timeline(tline_id, new_tline_id, Some(lsn))?;
+            tenant.branch_timeline(tline_id, new_tline_id, Some(lsn), RegionId(0))?;
             tline = tenant
                 .get_timeline(new_tline_id)
                 .expect("Should have the branched timeline");
