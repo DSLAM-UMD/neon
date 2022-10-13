@@ -582,6 +582,7 @@ impl PageServerHandler {
             timeline_id,
             base_lsn,
             pg_version,
+            utils::id::RegionId::default(),
         )?;
 
         // TODO mark timeline as not ready until it reaches end_lsn.

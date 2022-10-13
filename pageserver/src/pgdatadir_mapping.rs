@@ -1413,7 +1413,8 @@ pub fn create_test_timeline(
     timeline_id: utils::id::TimelineId,
     pg_version: u32,
 ) -> Result<std::sync::Arc<Timeline>> {
-    let tline = tenant.create_empty_timeline(timeline_id, Lsn(8), pg_version)?;
+    let tline =
+        tenant.create_empty_timeline(timeline_id, Lsn(8), pg_version, utils::id::RegionId(0))?;
     let mut m = tline.begin_modification(Lsn(8));
     m.init_empty()?;
     m.commit()?;

@@ -342,6 +342,7 @@ mod tests {
     use super::*;
     use crate::tenant::harness::{TenantHarness, TIMELINE_ID};
     use crate::DEFAULT_PG_VERSION;
+    use utils::id::RegionId;
 
     #[test]
     fn index_part_conversion() {
@@ -355,6 +356,7 @@ mod tests {
             Lsn(2),
             Lsn(1),
             DEFAULT_PG_VERSION,
+            RegionId(0),
         );
         let remote_timeline = RemoteTimeline {
             timeline_layers: HashSet::from([
@@ -480,6 +482,7 @@ mod tests {
             Lsn(2),
             Lsn(1),
             DEFAULT_PG_VERSION,
+            RegionId(0),
         );
 
         let conversion_result = IndexPart::from_remote_timeline(
