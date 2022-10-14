@@ -250,7 +250,7 @@ pub enum PagestreamBeMessage {
 pub struct PagestreamExistsRequest {
     pub latest: bool,
     pub lsn: Lsn,
-    pub region: u32,
+    pub region: RegionId,
     pub rel: RelTag,
 }
 
@@ -258,7 +258,7 @@ pub struct PagestreamExistsRequest {
 pub struct PagestreamNblocksRequest {
     pub latest: bool,
     pub lsn: Lsn,
-    pub region: u32,
+    pub region: RegionId,
     pub rel: RelTag,
 }
 
@@ -266,7 +266,7 @@ pub struct PagestreamNblocksRequest {
 pub struct PagestreamGetPageRequest {
     pub latest: bool,
     pub lsn: Lsn,
-    pub region: u32,
+    pub region: RegionId,
     pub rel: RelTag,
     pub blkno: u32,
 }
@@ -282,7 +282,7 @@ pub struct PagestreamDbSizeRequest {
 pub struct PagestreamGetSlruPageRequest {
     pub latest: bool,
     pub lsn: Lsn,
-    pub region: u32,
+    pub region: RegionId,
     pub kind: SlruKind,
     pub segno: u32,
     pub blkno: u32,
@@ -338,7 +338,7 @@ impl PagestreamFeMessage {
             0 => Ok(PagestreamFeMessage::Exists(PagestreamExistsRequest {
                 latest: body.get_u8() != 0,
                 lsn: Lsn::from(body.get_u64()),
-                region: body.get_u32(),
+                region: RegionId(body.get_u8()),
                 rel: RelTag {
                     spcnode: body.get_u32(),
                     dbnode: body.get_u32(),
@@ -349,7 +349,7 @@ impl PagestreamFeMessage {
             1 => Ok(PagestreamFeMessage::Nblocks(PagestreamNblocksRequest {
                 latest: body.get_u8() != 0,
                 lsn: Lsn::from(body.get_u64()),
-                region: body.get_u32(),
+                region: RegionId(body.get_u8()),
                 rel: RelTag {
                     spcnode: body.get_u32(),
                     dbnode: body.get_u32(),
@@ -360,7 +360,7 @@ impl PagestreamFeMessage {
             2 => Ok(PagestreamFeMessage::GetPage(PagestreamGetPageRequest {
                 latest: body.get_u8() != 0,
                 lsn: Lsn::from(body.get_u64()),
-                region: body.get_u32(),
+                region: RegionId(body.get_u8()),
                 rel: RelTag {
                     spcnode: body.get_u32(),
                     dbnode: body.get_u32(),
@@ -378,7 +378,7 @@ impl PagestreamFeMessage {
                 PagestreamGetSlruPageRequest {
                     latest: body.get_u8() != 0,
                     lsn: Lsn::from(body.get_u64()),
-                    region: body.get_u32(),
+                    region: RegionId(body.get_u8()),
                     kind: SlruKind::try_from(body.get_u8())?,
                     segno: body.get_u32(),
                     blkno: body.get_u32(),
