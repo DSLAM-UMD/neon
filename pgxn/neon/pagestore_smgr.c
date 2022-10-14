@@ -896,7 +896,7 @@ nm_pack_request(NeonRequest * msg)
 
 				pq_sendbyte(&s, msg_req->req.latest);
 				pq_sendint64(&s, msg_req->req.lsn);
-				pq_sendint32(&s, msg_req->req.region);
+				pq_sendint8(&s, msg_req->req.region);
 				pq_sendint32(&s, msg_req->rnode.spcNode);
 				pq_sendint32(&s, msg_req->rnode.dbNode);
 				pq_sendint32(&s, msg_req->rnode.relNode);
@@ -910,7 +910,7 @@ nm_pack_request(NeonRequest * msg)
 
 				pq_sendbyte(&s, msg_req->req.latest);
 				pq_sendint64(&s, msg_req->req.lsn);
-				pq_sendint32(&s, msg_req->req.region);
+				pq_sendint8(&s, msg_req->req.region);
 				pq_sendint32(&s, msg_req->rnode.spcNode);
 				pq_sendint32(&s, msg_req->rnode.dbNode);
 				pq_sendint32(&s, msg_req->rnode.relNode);
@@ -934,7 +934,7 @@ nm_pack_request(NeonRequest * msg)
 
 				pq_sendbyte(&s, msg_req->req.latest);
 				pq_sendint64(&s, msg_req->req.lsn);
-				pq_sendint32(&s, msg_req->req.region);
+				pq_sendint8(&s, msg_req->req.region);
 				pq_sendint32(&s, msg_req->rnode.spcNode);
 				pq_sendint32(&s, msg_req->rnode.dbNode);
 				pq_sendint32(&s, msg_req->rnode.relNode);
@@ -949,7 +949,7 @@ nm_pack_request(NeonRequest * msg)
 
 				pq_sendbyte(&s, msg_req->req.latest);
 				pq_sendint64(&s, msg_req->req.lsn);
-				pq_sendint32(&s, msg_req->req.region);
+				pq_sendint8(&s, msg_req->req.region);
 				pq_sendbyte(&s, msg_req->kind);
 				pq_sendint32(&s, msg_req->segno);
 				pq_sendint32(&s, msg_req->blkno);
