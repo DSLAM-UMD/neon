@@ -1153,7 +1153,10 @@ impl Tenant {
                     region_id,
                 )?
             }
-            None => self.bootstrap_timeline(new_timeline_id, pg_version, region_id).await?,
+            None => {
+                self.bootstrap_timeline(new_timeline_id, pg_version, region_id)
+                    .await?
+            }
         };
 
         Ok(Some(loaded_timeline))
