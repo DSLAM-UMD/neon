@@ -572,7 +572,7 @@ pub enum PagestreamBeMessage {
 pub struct PagestreamExistsRequest {
     pub latest: bool,
     pub lsn: Lsn,
-    pub region: u32,
+    pub region: RegionId,
     pub rel: RelTag,
 }
 
@@ -580,7 +580,7 @@ pub struct PagestreamExistsRequest {
 pub struct PagestreamNblocksRequest {
     pub latest: bool,
     pub lsn: Lsn,
-    pub region: u32,
+    pub region: RegionId,
     pub rel: RelTag,
 }
 
@@ -588,7 +588,7 @@ pub struct PagestreamNblocksRequest {
 pub struct PagestreamGetPageRequest {
     pub latest: bool,
     pub lsn: Lsn,
-    pub region: u32,
+    pub region: RegionId,
     pub rel: RelTag,
     pub blkno: u32,
 }
@@ -604,7 +604,7 @@ pub struct PagestreamDbSizeRequest {
 pub struct PagestreamGetSlruPageRequest {
     pub latest: bool,
     pub lsn: Lsn,
-    pub region: u32,
+    pub region: RegionId,
     pub kind: SlruKind,
     pub segno: u32,
     pub blkno: u32,
@@ -660,7 +660,7 @@ impl PagestreamFeMessage {
                 bytes.put_u32(req.rel.dbnode);
                 bytes.put_u32(req.rel.relnode);
                 bytes.put_u8(req.rel.forknum);
-                bytes.put_u32(req.region);
+                bytes.put_u8(req.region.0);
             }
 
             Self::Nblocks(req) => {
@@ -671,7 +671,7 @@ impl PagestreamFeMessage {
                 bytes.put_u32(req.rel.dbnode);
                 bytes.put_u32(req.rel.relnode);
                 bytes.put_u8(req.rel.forknum);
-                bytes.put_u32(req.region);
+                bytes.put_u8(req.region.0);
             }
 
             Self::GetPage(req) => {
@@ -683,7 +683,7 @@ impl PagestreamFeMessage {
                 bytes.put_u32(req.rel.relnode);
                 bytes.put_u8(req.rel.forknum);
                 bytes.put_u32(req.blkno);
-                bytes.put_u32(req.region);
+                bytes.put_u8(req.region.0);
             }
 
             Self::DbSize(req) => {
@@ -701,7 +701,7 @@ impl PagestreamFeMessage {
                 bytes.put_u32(req.segno);
                 bytes.put_u32(req.blkno);
                 bytes.put_u8(if req.check_exists_only { 1 } else { 0 });
-                bytes.put_u32(req.region);
+                bytes.put_u8(req.region.0);
             }
         }
 
@@ -720,7 +720,7 @@ impl PagestreamFeMessage {
             0 => Ok(PagestreamFeMessage::Exists(PagestreamExistsRequest {
                 latest: body.read_u8()? != 0,
                 lsn: Lsn::from(body.read_u64::<BigEndian>()?),
-                region: body.read_u32::<BigEndian>()?,
+                region: RegionId(body.read_u8()?),
                 rel: RelTag {
                     spcnode: body.read_u32::<BigEndian>()?,
                     dbnode: body.read_u32::<BigEndian>()?,
@@ -731,7 +731,7 @@ impl PagestreamFeMessage {
             1 => Ok(PagestreamFeMessage::Nblocks(PagestreamNblocksRequest {
                 latest: body.read_u8()? != 0,
                 lsn: Lsn::from(body.read_u64::<BigEndian>()?),
-                region: body.read_u32::<BigEndian>()?,
+                region: RegionId(body.read_u8()?),
                 rel: RelTag {
                     spcnode: body.read_u32::<BigEndian>()?,
                     dbnode: body.read_u32::<BigEndian>()?,
@@ -742,7 +742,7 @@ impl PagestreamFeMessage {
             2 => Ok(PagestreamFeMessage::GetPage(PagestreamGetPageRequest {
                 latest: body.read_u8()? != 0,
                 lsn: Lsn::from(body.read_u64::<BigEndian>()?),
-                region: body.read_u32::<BigEndian>()?,
+                region: RegionId(body.read_u8()?),
                 rel: RelTag {
                     spcnode: body.read_u32::<BigEndian>()?,
                     dbnode: body.read_u32::<BigEndian>()?,
@@ -760,7 +760,7 @@ impl PagestreamFeMessage {
                 PagestreamGetSlruPageRequest {
                     latest: body.read_u8()? != 0,
                     lsn: Lsn::from(body.read_u64::<BigEndian>()?),
-                    region: body.read_u32::<BigEndian>()?,
+                    region: RegionId(body.read_u8()?),
                     kind: SlruKind::try_from(body.read_u8()?)?,
                     segno: body.read_u32::<BigEndian>()?,
                     blkno: body.read_u32::<BigEndian>()?,
@@ -843,7 +843,7 @@ mod tests {
                     dbnode: 3,
                     relnode: 4,
                 },
-                region: 0,
+                region: RegionId(0),
             }),
             PagestreamFeMessage::Nblocks(PagestreamNblocksRequest {
                 latest: false,
@@ -854,7 +854,7 @@ mod tests {
                     dbnode: 3,
                     relnode: 4,
                 },
-                region: 0,
+                region: RegionId(0),
             }),
             PagestreamFeMessage::GetPage(PagestreamGetPageRequest {
                 latest: true,
@@ -866,7 +866,7 @@ mod tests {
                     relnode: 4,
                 },
                 blkno: 7,
-                region: 0,
+                region: RegionId(0),
             }),
             PagestreamFeMessage::DbSize(PagestreamDbSizeRequest {
                 latest: true,
