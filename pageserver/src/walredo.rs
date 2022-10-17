@@ -584,7 +584,7 @@ impl PostgresRedoManager {
                     LittleEndian::write_u32(&mut page[memberoff..memberoff + 4], member.xid);
                 }
             }
-            NeonWalRecord::CsnLogSetCommitted { xids, lsn } => {
+            NeonWalRecord::CsnLogSetCommitted { xids, region, lsn } => {
                 let (slru_kind, segno, blknum) =
                     key_to_slru_block(key).or(Err(WalRedoError::InvalidRecord))?;
                 assert_eq!(
@@ -595,7 +595,9 @@ impl PostgresRedoManager {
                 );
 
                 for &xid in xids {
-                    let pageno = xid as u32 / pg_constants::CSN_LOG_XACTS_PER_PAGE;
+                    let pageno = ((xid as u32 / pg_constants::CSN_LOG_XACTS_PER_PAGE)
+                        * pg_constants::MAX_REGIONS)
+                        + *region;
                     let expected_segno = pageno / pg_constants::SLRU_PAGES_PER_SEGMENT;
                     let expected_blknum = pageno % pg_constants::SLRU_PAGES_PER_SEGMENT;
 
@@ -615,7 +617,7 @@ impl PostgresRedoManager {
                     transaction_id_set_csn(xid, *lsn, page);
                 }
             }
-            NeonWalRecord::CsnLogSetAborted { xids } => {
+            NeonWalRecord::CsnLogSetAborted { xids, region } => {
                 let (slru_kind, segno, blknum) =
                     key_to_slru_block(key).or(Err(WalRedoError::InvalidRecord))?;
                 assert_eq!(
@@ -626,7 +628,9 @@ impl PostgresRedoManager {
                 );
 
                 for &xid in xids {
-                    let pageno = xid as u32 / pg_constants::CSN_LOG_XACTS_PER_PAGE;
+                    let pageno = ((xid as u32 / pg_constants::CSN_LOG_XACTS_PER_PAGE)
+                        * pg_constants::MAX_REGIONS)
+                        + *region;
                     let expected_segno = pageno / pg_constants::SLRU_PAGES_PER_SEGMENT;
                     let expected_blknum = pageno % pg_constants::SLRU_PAGES_PER_SEGMENT;
 
