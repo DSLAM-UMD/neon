@@ -455,6 +455,7 @@ pg_init_libpagestore(void)
 							PGC_SIGHUP,
 							GUC_UNIT_MB,
 							NULL, NULL, NULL);
+
 	DefineCustomBoolVariable("neon.slru_clog",
 							 "read clog from the page server",
 							 NULL,
