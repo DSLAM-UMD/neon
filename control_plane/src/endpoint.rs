@@ -378,9 +378,12 @@ impl Endpoint {
             // testing.
             conf.append("synchronous_standby_names", "pageserver");
         }
-
-        // UMD: Remotexact and multi-region configurations
+        
+        //
+        // Remotexact: multi-region configurations
+        //
         conf.append("enable_csn_snapshot", "on");
+        conf.append("neon.slru_csnlog", "on");
         // TODO(ctring): consider a different value or make this an argument somewhere
         conf.append("max_prepared_transactions", "64");
         conf.append(
