@@ -270,6 +270,7 @@ impl Endpoint {
 
         // Remotexact: Multi-region configurations
         conf.append("enable_csn_snapshot", "on");
+        conf.append("neon.slru_csnlog", "on");
         conf.append("max_prepared_transactions", "64");
         conf.append(
             "remotexact.connstring",
