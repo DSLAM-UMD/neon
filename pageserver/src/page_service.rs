@@ -714,7 +714,7 @@ impl PageServerHandler {
         Ok(lsn)
     }
 
-    #[instrument(skip(self, timeline, req, ctx), fields(rel = %req.rel, req_lsn = %req.lsn))]
+    #[instrument(skip(self, timeline, req, ctx), fields(region = %timeline.region_id, rel = %req.rel, req_lsn = %req.lsn))]
     async fn handle_get_rel_exists_request(
         &self,
         timeline: &Timeline,
@@ -736,7 +736,7 @@ impl PageServerHandler {
         }))
     }
 
-    #[instrument(skip(self, timeline, req, ctx), fields(rel = %req.rel, req_lsn = %req.lsn))]
+    #[instrument(skip(self, timeline, req, ctx), fields(region = %timeline.region_id, rel = %req.rel, req_lsn = %req.lsn))]
     async fn handle_get_nblocks_request(
         &self,
         timeline: &Timeline,
@@ -756,7 +756,7 @@ impl PageServerHandler {
         }))
     }
 
-    #[instrument(skip(self, timeline, req, ctx), fields(dbnode = %req.dbnode, req_lsn = %req.lsn))]
+    #[instrument(skip(self, timeline, req, ctx), fields(region = %timeline.region_id, dbnode = %req.dbnode, req_lsn = %req.lsn))]
     async fn handle_db_size_request(
         &self,
         timeline: &Timeline,
@@ -779,7 +779,7 @@ impl PageServerHandler {
         }))
     }
 
-    #[instrument(skip(self, timeline, req, ctx), fields(rel = %req.rel, blkno = %req.blkno, req_lsn = %req.lsn))]
+    #[instrument(skip(self, timeline, req, ctx), fields(region = %timeline.region_id, rel = %req.rel, blkno = %req.blkno, req_lsn = %req.lsn))]
     async fn handle_get_page_at_lsn_request(
         &self,
         timeline: &Timeline,
@@ -809,7 +809,7 @@ impl PageServerHandler {
         }))
     }
 
-    #[instrument(skip(self, timeline, req, ctx), fields(slru_kind = %req.kind.to_str(), segno = %req.segno,
+    #[instrument(skip(self, timeline, req, ctx), fields(region = %timeline.region_id, slru_kind = %req.kind.to_str(), segno = %req.segno,
                  check_blkno = %req.blkno, req_lsn = %req.lsn, check_exists_only = %req.check_exists_only))]
     async fn handle_get_slru_page_at_lsn_request(
         &self,
