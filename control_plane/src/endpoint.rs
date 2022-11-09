@@ -63,6 +63,7 @@ impl ComputeControlPlane {
             .unwrap_or(self.base_port)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_endpoint(
         &mut self,
         tenant_id: TenantId,
