@@ -114,34 +114,40 @@ jobs:
       - name: Ensure all project builds
         run: cargo build --locked --all --all-targets
 
-  check-rust-dependencies:
-    runs-on: [ self-hosted, dev, x64 ]
-    container:
-      image: 369495373322.dkr.ecr.eu-central-1.amazonaws.com/rust:pinned
-      options: --init
+  # check-rust-dependencies:
+  #   runs-on: [ self-hosted, dev, x64 ]
+  #   container:
+  #     image: 369495373322.dkr.ecr.eu-central-1.amazonaws.com/rust:pinned
+  #     options: --init
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-        with:
-          submodules: false
-          fetch-depth: 1
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v3
+  #       with:
+  #         submodules: false
+  #         fetch-depth: 1
 
-      # https://github.com/facebookincubator/cargo-guppy/tree/bec4e0eb29dcd1faac70b1b5360267fc02bf830e/tools/cargo-hakari#2-keep-the-workspace-hack-up-to-date-in-ci
-      - name: Check every project module is covered by Hakari
-        run: |
-          cargo hakari generate --diff  # workspace-hack Cargo.toml is up-to-date
-          cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
-        shell: bash -euxo pipefail {0}
+  #     # https://github.com/facebookincubator/cargo-guppy/tree/bec4e0eb29dcd1faac70b1b5360267fc02bf830e/tools/cargo-hakari#2-keep-the-workspace-hack-up-to-date-in-ci
+  #     - name: Check every project module is covered by Hakari
+  #       run: |
+  #         cargo hakari generate --diff  # workspace-hack Cargo.toml is up-to-date
+  #         cargo hakari manage-deps --dry-run  # all workspace crates depend on workspace-hack
+  #       shell: bash -euxo pipefail {0}
 
   check-codestyle-python:
-    runs-on: [ self-hosted, Linux, k8s-runner ]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v3
         with:
           submodules: false
           fetch-depth: 1
+
+      # (Remotexact) ./scripts/pysync requires Python 3.9+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10' 
 
       - name: Cache poetry deps
         id: cache_poetry
@@ -151,7 +157,9 @@ jobs:
           key: v1-codestyle-python-deps-${{ hashFiles('poetry.lock') }}
 
       - name: Install Python deps
-        run: ./scripts/pysync
+        run: |
+          python3 -m pip install poetry
+          ./scripts/pysync
 
       - name: Run isort to ensure code format
         run: poetry run isort --diff --check .
