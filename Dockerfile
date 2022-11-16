@@ -8,6 +8,7 @@ ARG TAG=pinned
 
 # Build Postgres
 FROM $REPOSITORY/$IMAGE:$TAG AS pg-build
+USER nonroot
 WORKDIR /home/nonroot
 
 COPY --chown=nonroot vendor/postgres-v14 vendor/postgres-v14
