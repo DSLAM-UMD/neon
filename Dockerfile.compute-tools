@@ -6,6 +6,7 @@ ARG TAG=pinned
 ARG BUILD_TAG
 
 FROM $REPOSITORY/$IMAGE:$TAG AS rust-build
+USER nonroot
 WORKDIR /home/nonroot
 
 # Enable https://github.com/paritytech/cachepot to cache Rust crates' compilation results in Docker builds.
@@ -20,7 +21,7 @@ ARG CACHEPOT_BUCKET=neon-github-dev
 ARG BUILD_TAG
 ENV BUILD_TAG=$BUILD_TAG
 
-COPY . .
+COPY --chown=nonroot . .
 
 RUN set -e \
     && mold -run cargo build -p compute_tools --locked --release \
