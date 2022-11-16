@@ -2,12 +2,13 @@
 ### The image itself is mainly used as a container for the binaries and for starting e2e tests with custom parameters.
 ### By default, the binaries inside the image have some mock parameters and can start, but are not intended to be used
 ### inside this image in the real deployments.
-ARG REPOSITORY=369495373322.dkr.ecr.eu-central-1.amazonaws.com
+ARG REPOSITORY=neondatabase
 ARG IMAGE=rust
 ARG TAG=pinned
 
 # Build Postgres
 FROM $REPOSITORY/$IMAGE:$TAG AS pg-build
+USER nonroot
 WORKDIR /home/nonroot
 
 COPY --chown=nonroot vendor/postgres-v14 vendor/postgres-v14
