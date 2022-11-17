@@ -3,9 +3,7 @@ name: Build and Test
 on:
   push:
     branches:
-      - main
-      - release
-      - ci-run/pr-*
+      - remotexact
   pull_request:
 
 defaults:
