@@ -138,6 +138,7 @@ async fn build_timeline_info(
     let state = timeline.current_state();
 
     let info = TimelineInfo {
+        region_id: timeline.region_id,
         tenant_id: timeline.tenant_id,
         timeline_id: timeline.timeline_id,
         ancestor_timeline_id,
