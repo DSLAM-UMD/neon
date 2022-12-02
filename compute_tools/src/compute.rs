@@ -28,7 +28,7 @@ use serde::{Serialize, Serializer};
 use tokio_postgres;
 use tracing::{info, instrument, warn};
 
-use crate::checker::create_writability_check_data;
+// use crate::checker::create_writability_check_data;
 use crate::config;
 use crate::pg_helpers::*;
 use crate::spec::*;
@@ -284,8 +284,9 @@ impl ComputeNode {
         handle_databases(&self.spec, &mut client)?;
         handle_role_deletions(self, &mut client)?;
         handle_grants(self, &mut client)?;
-        create_writability_check_data(&mut client)?;
-        handle_extensions(&self.spec, &mut client)?;
+        // Remotexact - disable these functions because they run DDL statements
+        // create_writability_check_data(&mut client)?;
+        // handle_extensions(&self.spec, &mut client)?;
 
         // 'Close' connection
         drop(client);
