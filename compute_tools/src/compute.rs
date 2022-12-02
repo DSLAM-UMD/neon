@@ -27,7 +27,6 @@ use log::info;
 use postgres::{Client, NoTls};
 use serde::{Serialize, Serializer};
 
-use crate::checker::create_writablity_check_data;
 use crate::config;
 use crate::pg_helpers::*;
 use crate::spec::*;
@@ -292,7 +291,8 @@ impl ComputeNode {
         handle_databases(&self.spec, &mut client)?;
         handle_role_deletions(self, &mut client)?;
         handle_grants(self, &mut client)?;
-        create_writablity_check_data(&mut client)?;
+        // Remotexact - disable this function because it run DDL statements
+        // create_writablity_check_data(&mut client)?;
 
         // 'Close' connection
         drop(client);
