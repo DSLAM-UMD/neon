@@ -678,7 +678,7 @@ impl ComputeNode {
         handle_databases(spec, &mut client)?;
         handle_role_deletions(spec, self.connstr.as_str(), &mut client)?;
         handle_grants(spec, self.connstr.as_str())?;
-        handle_extensions(spec, &mut client)?;
+        // handle_extensions(spec, &mut client)?;
 
         // 'Close' connection
         drop(client);
