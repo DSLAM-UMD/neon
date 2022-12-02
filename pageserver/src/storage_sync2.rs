@@ -1106,6 +1106,7 @@ mod tests {
     use crate::tenant::harness::{TenantHarness, TIMELINE_ID};
     use remote_storage::{RemoteStorageConfig, RemoteStorageKind};
     use std::{collections::HashSet, path::Path};
+    use utils::id::RegionId;
     use utils::lsn::Lsn;
 
     pub(super) fn dummy_contents(name: &str) -> Vec<u8> {
@@ -1123,6 +1124,7 @@ mod tests {
             // Any version will do
             // but it should be consistent with the one in the tests
             crate::DEFAULT_PG_VERSION,
+            RegionId(0),
         );
 
         // go through serialize + deserialize to fix the header, including checksum
