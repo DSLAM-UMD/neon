@@ -322,7 +322,7 @@ impl PageServerHandler {
         let timelines = if let Some(id) = timeline_id {
             HashMap::from([(RegionId::default(), tenant.get_timeline(id, true)?)])
         } else {
-            get_timelines_indexed_by_region_id(&*tenant)?
+            get_timelines_indexed_by_region_id(&tenant)?
         };
 
         // switch client to COPYBOTH
@@ -388,8 +388,7 @@ impl PageServerHandler {
                     let _timer = metrics.get_rel_size.start_timer();
                     match get_timeline_by_region_id(&timelines, req.region) {
                         Ok(timeline) => {
-                            self.handle_get_nblocks_request(&*timeline, &req, &ctx)
-                                .await
+                            self.handle_get_nblocks_request(&timeline, &req, &ctx).await
                         }
                         Err(e) => Err(e),
                     }
@@ -398,7 +397,7 @@ impl PageServerHandler {
                     let _timer = metrics.get_page_at_lsn.start_timer();
                     match get_timeline_by_region_id(&timelines, req.region) {
                         Ok(timeline) => {
-                            self.handle_get_page_at_lsn_request(&*timeline, &req, &ctx)
+                            self.handle_get_page_at_lsn_request(&timeline, &req, &ctx)
                                 .await
                         }
                         Err(e) => Err(e),
@@ -407,7 +406,7 @@ impl PageServerHandler {
                 PagestreamFeMessage::DbSize(req) => {
                     let _timer = metrics.get_db_size.start_timer();
                     match get_timeline_by_region_id(&timelines, RegionId::default()) {
-                        Ok(timeline) => self.handle_db_size_request(&*timeline, &req, &ctx).await,
+                        Ok(timeline) => self.handle_db_size_request(&timeline, &req, &ctx).await,
                         Err(e) => Err(e),
                     }
                 }
@@ -415,7 +414,7 @@ impl PageServerHandler {
                     let _timer = metrics.get_slru_page.start_timer();
                     match get_timeline_by_region_id(&timelines, req.region) {
                         Ok(timeline) => {
-                            self.handle_get_slru_page_at_lsn_request(&*timeline, &req, &ctx)
+                            self.handle_get_slru_page_at_lsn_request(&timeline, &req, &ctx)
                                 .await
                         }
                         Err(e) => Err(e),
