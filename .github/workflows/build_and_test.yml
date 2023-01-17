@@ -952,10 +952,10 @@ jobs:
           crane tag ctring/neon:${{needs.tag.outputs.build-tag}} latest
           crane tag ctring/compute-tools:${{needs.tag.outputs.build-tag}} latest
           crane tag ctring/compute-node-v14:${{needs.tag.outputs.build-tag}} latest
-          crane tag ctring/vm-compute-node-v14:${{needs.tag.outputs.build-tag}} latest
+        # crane tag ctring/vm-compute-node-v14:${{needs.tag.outputs.build-tag}} latest
           crane tag ctring/extensions-v14:${{needs.tag.outputs.build-tag}} latest
           crane tag ctring/compute-node-v15:${{needs.tag.outputs.build-tag}} latest
-          crane tag ctring/vm-compute-node-v15:${{needs.tag.outputs.build-tag}} latest
+        # crane tag ctring/vm-compute-node-v15:${{needs.tag.outputs.build-tag}} latest
           crane tag ctring/extensions-v15:${{needs.tag.outputs.build-tag}} latest
 
       - name: Cleanup ECR folder
