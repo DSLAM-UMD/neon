@@ -271,16 +271,15 @@ rx_collect_insert(Relation relation, HeapTuple newtuple)
 {
 	StringInfo	buf = NULL;
 	int region = RelationGetRegion(relation);
+	#if PG_VERSION_NUM >= 150000
+		TupleTableSlot *newslot;
+	#endif
 
 	if (region == GLOBAL_REGION && current_region != GLOBAL_REGION)
 	{
 		ereport(ERROR, errmsg("[remotexact] attempting to write to a read-only region."));
 		return;
 	}
-
-#if PG_VERSION_NUM >= 150000
-	TupleTableSlot *newslot;
-#endif
 
 	init_rwset_collection_buffer(relation->rd_node.dbNode);
 
