@@ -99,7 +99,7 @@ mc_image=quay.io/minio/mc
 # Allow alias in shell script
 shopt -s expand_aliases 
 # Remove the mc-config volume to start fresh
-docker volume rm -f mc-config 
+docker volume rm mc-config || true 
 alias mc="docker run --rm -it                                         \
                      --network host                                   \
                      --mount source=mc-config,target=/.mc             \
