@@ -14,6 +14,11 @@
 #   NEON_DATA is the path to the neon data directory (typically ".neon") to be
 #   uploaded to minio.
 #
+#   If the script finds a "topology.json" file in the current directory, it will
+#   add labels to nodes according to this file. The content the file is an object
+#   whose keys are the name of the node and values are lists of labels to be added
+#   to the corresponding node.
+#
 if [ "$#" -ne 2 ]; then
   echo "Usage: $0 {compose|swarm} NEON_DATA"
   exit 1
@@ -73,6 +78,17 @@ elif [ "$mode" = "swarm" ]; then
   if [ ! -z $(docker service ls -q -f name="registry") ]; then
     echo "Service \"registry\" exists. Please stop and remove it before running this script."
     exit 1
+  fi
+
+  if [ -f "topology.json" ]; then
+    echo "Found \"topology.json\". Setting labels for nodes"
+    for node in $(jq -r "keys[]" topology.json); do
+      echo "$node"
+      for label in $(jq -r ".[\"$node\"][]" topology.json); do
+        echo -n "\t$label..."
+        docker node update --label-add $label $node 1> /dev/null && echo "\033[0;32mOK\033[0m"
+      done
+    done 
   fi
 
   if [ -z $(docker network ls -q -f name="neon") ]; then
