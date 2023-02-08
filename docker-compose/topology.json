@@ -1,0 +1,23 @@
+{
+  "ip-111-111-111-111": [
+    "region=1",
+    "has_pageserver=true",
+    "has_safekeeper1=true",
+    "has_compute=true",
+    "has_xactserver=true"
+  ],
+  "ip-222-222-222-222": [
+    "region=2",
+    "has_pageserver=true",
+    "has_safekeeper1=true",
+    "has_compute=true",
+    "has_xactserver=true"
+  ],
+  "ip-333-333-333-333": [
+    "region=3",
+    "has_pageserver=true",
+    "has_safekeeper1=true",
+    "has_compute=true",
+    "has_xactserver=true"
+  ]
+}
