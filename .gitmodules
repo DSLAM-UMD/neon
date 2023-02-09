@@ -1,7 +1,7 @@
 [submodule "vendor/postgres-v14"]
 	path = vendor/postgres-v14
 	url = https://github.com/DSLAM-UMD/postgres.git
-	branch = remotexact
+	branch = REL_14_STABLE_remotexact
 [submodule "vendor/postgres-v15"]
 	path = vendor/postgres-v15
 	url = https://github.com/DSLAM-UMD/postgres.git
