@@ -277,6 +277,7 @@ impl Endpoint {
             &format!("postgresql://{}", &self.env.xactserver.listen_pg_addr),
         );
         conf.append("current_region", &self.region_id.to_string());
+        conf.append("multi_region", "on");
 
         conf.append_line("");
         // Replication-related configurations, such as WAL sending
