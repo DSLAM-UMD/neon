@@ -392,6 +392,7 @@ impl PostgresNode {
             &format!("postgresql://{}", &self.env.xactserver.listen_pg_addr),
         );
         conf.append("current_region", &self.region_id.to_string());
+        conf.append("multi_region", "on");
 
         let mut file = File::create(self.pgdata().join("postgresql.conf"))?;
         file.write_all(conf.to_string().as_bytes())?;
