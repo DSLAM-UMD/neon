@@ -64,6 +64,7 @@ fn main() -> Result<()> {
         .expect("Postgres connection string is required");
     let spec = matches.get_one::<String>("spec");
     let spec_path = matches.get_one::<String>("spec-path");
+    let valgrind = matches.get_one::<String>("valgrind");
 
     let compute_id = matches.get_one::<String>("compute-id");
     let control_plane_uri = matches.get_one::<String>("control-plane-uri");
@@ -149,6 +150,7 @@ fn main() -> Result<()> {
         connstr: Url::parse(connstr).context("cannot parse connstr as a URL")?,
         pgdata: pgdata.to_string(),
         pgbin: pgbin.to_string(),
+        valgrind: valgrind.cloned(),
         spec,
         tenant,
         timeline,
@@ -261,6 +263,7 @@ fn cli() -> clap::Command {
                 .long("control-plane-uri")
                 .value_name("CONTROL_PLANE"),
         )
+        .arg(Arg::new("valgrind").long("valgrind").value_name("VALGRIND"))
 }
 
 #[test]
