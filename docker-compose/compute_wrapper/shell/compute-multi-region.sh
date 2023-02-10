@@ -3,7 +3,7 @@ set -eux
 
 PG_VERSION=${PG_VERSION:-14}
 
-SPEC_FILE_ORG=/var/db/postgres/specs/spec-multi-region.json
+SPEC_FILE_ORIGINAL=/var/db/postgres/specs/spec-multi-region.json
 SPEC_FILE=/tmp/spec.json
 
 echo "Waiting pageserver become ready."
@@ -32,7 +32,7 @@ echo "Tenant id: ${tenant_id}"
 echo "Timeline id: ${timeline_id}"
 
 echo "Overwrite variables in spec file"
-sed "s/TENANT_ID/${tenant_id}/" ${SPEC_FILE_ORG} > ${SPEC_FILE}
+sed "s/TENANT_ID/${tenant_id}/" ${SPEC_FILE_ORIGINAL} > ${SPEC_FILE}
 sed -i "s/TIMELINE_ID/${timeline_id}/" ${SPEC_FILE}
 sed -i "s/SAFEKEEPERS_ADDR/${SAFEKEEPERS_ADDR}/" ${SPEC_FILE}
 sed -i "s/PAGESERVER_HOST/${PAGESERVER_HOST}/" ${SPEC_FILE}
@@ -42,7 +42,12 @@ sed -i "s/REGION/${REGION}/" ${SPEC_FILE}
 cat ${SPEC_FILE}
 
 echo "Start compute node"
-/usr/local/bin/compute_ctl --pgdata /var/db/postgres/compute \
-     -C "postgresql://cloud_admin@localhost:55433/postgres"  \
-     -b /usr/local/bin/postgres                              \
+/usr/local/bin/compute_ctl --pgdata /var/db/postgres/compute                    \
+     -C "postgresql://cloud_admin@localhost:55433/postgres"                     \
+     -b /usr/local/bin/postgres                                                 \
      -S ${SPEC_FILE}
+     # --valgrind "valgrind --leak-check=no                                       \
+     #                      --error-markers=VALGRINDERROR-BEGIN,VALGRINDERROR-END \
+     #                      --suppressions=/shell/valgrind.supp                   \
+     #                      --trace-children=yes                                  \
+     #                      --time-stamp=yes"                                     

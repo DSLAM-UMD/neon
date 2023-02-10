@@ -90,6 +90,7 @@ fn main() -> Result<()> {
         .expect("Postgres connection string is required");
     let spec_json = matches.get_one::<String>("spec");
     let spec_path = matches.get_one::<String>("spec-path");
+    let valgrind = matches.get_one::<String>("valgrind");
 
     // Extract OpenTelemetry context for the startup actions from the
     // TRACEPARENT and TRACESTATE env variables, and attach it to the current
@@ -192,6 +193,7 @@ fn main() -> Result<()> {
         pgdata: pgdata.to_string(),
         pgbin: pgbin.to_string(),
         pgversion: get_pg_version(pgbin),
+        valgrind: valgrind.cloned(),
         live_config_allowed,
         state: Mutex::new(new_state),
         state_changed: Condvar::new(),
@@ -393,6 +395,7 @@ fn cli() -> clap::Command {
                 .long("remote-ext-config")
                 .value_name("REMOTE_EXT_CONFIG"),
         )
+        .arg(Arg::new("valgrind").long("valgrind").value_name("VALGRIND"))
 }
 
 #[test]
