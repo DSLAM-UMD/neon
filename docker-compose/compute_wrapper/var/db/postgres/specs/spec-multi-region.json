@@ -149,6 +149,11 @@
                 "vartype": "string"
             },
             {
+                "name": "multi_region",
+                "value": "on",
+                "vartype": "bool"
+            },
+            {
                 "name": "current_region",
                 "value": "REGION",
                 "vartype": "integer"
