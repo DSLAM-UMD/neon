@@ -62,6 +62,8 @@ configs:
     file: ./compute_wrapper/var/db/postgres/specs/spec-multi-region.json
   compute_shell:
     file: ./compute_wrapper/shell/compute-multi-region.sh
+  valgrind_supp:
+    file: ./compute_wrapper/valgrind.supp
   prometheus:
     file: ./prometheus.yml
 
@@ -259,6 +261,8 @@ services:
       - source: compute_shell
         target: /shell/compute-multi-region.sh
         mode: 0555 # readable and executable
+      - source: valgrind_supp
+        target: /shell/valgrind.supp
     ports:
       - 55433:55433 # pg protocol handler
     entrypoint:
