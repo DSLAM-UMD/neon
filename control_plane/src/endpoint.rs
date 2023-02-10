@@ -386,29 +386,46 @@ impl Endpoint {
         }
     }
 
-    fn pg_ctl(&self, args: &[&str], auth_token: &Option<String>) -> Result<()> {
+    fn pg_ctl(
+        &self,
+        args: &[&str],
+        auth_token: &Option<String>,
+        valgrind: Option<&String>,
+    ) -> Result<()> {
         let pg_ctl_path = self.env.pg_bin_dir(self.pg_version)?.join("pg_ctl");
-        let mut cmd = Command::new(&pg_ctl_path);
-        cmd.args(
-            [
-                &[
-                    "-D",
-                    self.pgdata().to_str().unwrap(),
-                    "-w", //wait till pg_ctl actually does what was asked
-                ],
-                args,
-            ]
-            .concat(),
-        )
-        .env_clear()
-        .env(
-            "LD_LIBRARY_PATH",
-            self.env.pg_lib_dir(self.pg_version)?.to_str().unwrap(),
-        )
-        .env(
-            "DYLD_LIBRARY_PATH",
-            self.env.pg_lib_dir(self.pg_version)?.to_str().unwrap(),
-        );
+        let pg_data = self.pgdata();
+        let pg_ctl_args = [
+            "-D",
+            pg_data.to_str().unwrap(),
+            "-w", //wait till pg_ctl actually does what was asked
+        ];
+        let mut cmd_args: Vec<&str>;
+
+        let mut cmd = if let Some(valgrind) = valgrind {
+            let mut valgrind_tok = valgrind.split_whitespace();
+            let valgrind_path = valgrind_tok.next().expect("invalid valgrind command");
+
+            cmd_args = valgrind_tok.collect();
+            cmd_args.push(pg_ctl_path.to_str().unwrap());
+            cmd_args.extend_from_slice(&pg_ctl_args);
+            Command::new(valgrind_path)
+        } else {
+            cmd_args = pg_ctl_args.to_vec();
+            Command::new(pg_ctl_path.to_str().unwrap())
+        };
+
+        cmd_args.extend_from_slice(args);
+
+        cmd.args(cmd_args)
+            .env_clear()
+            .env(
+                "LD_LIBRARY_PATH",
+                self.env.pg_lib_dir(self.pg_version)?.to_str().unwrap(),
+            )
+            .env(
+                "DYLD_LIBRARY_PATH",
+                self.env.pg_lib_dir(self.pg_version)?.to_str().unwrap(),
+            );
 
         // Pass authentication token used for the connections to pageserver and safekeepers
         if let Some(token) = auth_token {
@@ -444,6 +461,7 @@ impl Endpoint {
         auth_token: &Option<String>,
         safekeepers: Vec<NodeId>,
         remote_ext_config: Option<&String>,
+        _valgrind: Option<&String>, // TODO (ctring): cannot use valgrind at the moment
     ) -> Result<()> {
         if self.status() == "running" {
             anyhow::bail!("The endpoint is already running");
@@ -643,14 +661,14 @@ impl Endpoint {
         // without destroy only used for testing and debugging.
         //
         if destroy {
-            self.pg_ctl(&["-m", "immediate", "stop"], &None)?;
+            self.pg_ctl(&["-m", "immediate", "stop"], &None, None)?;
             println!(
                 "Destroying postgres data directory '{}'",
                 self.pgdata().to_str().unwrap()
             );
             std::fs::remove_dir_all(self.endpoint_path())?;
         } else {
-            self.pg_ctl(&["stop"], &None)?;
+            self.pg_ctl(&["stop"], &None, None)?;
         }
         Ok(())
     }

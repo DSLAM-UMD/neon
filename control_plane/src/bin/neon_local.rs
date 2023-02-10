@@ -728,6 +728,8 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                 .copied()
                 .unwrap_or(false);
 
+            let valgrind = sub_args.get_one::<String>("valgrind");
+
             if let Some(endpoint) = endpoint {
                 match (&endpoint.mode, hot_standby) {
                     (ComputeMode::Static(_), true) => {
@@ -739,7 +741,7 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                     _ => {}
                 }
                 println!("Starting existing endpoint {endpoint_id}...");
-                endpoint.start(&auth_token, safekeepers, remote_ext_config)?;
+                endpoint.start(&auth_token, safekeepers, remote_ext_config, valgrind)?;
             } else {
                 let branch_name = sub_args
                     .get_one::<String>("branch-name")
@@ -783,7 +785,7 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                     mode,
                     region_id,
                 )?;
-                ep.start(&auth_token, safekeepers, remote_ext_config)?;
+                ep.start(&auth_token, safekeepers, remote_ext_config, valgrind)?;
             }
         }
         "stop" => {
@@ -1069,7 +1071,11 @@ fn cli() -> Command {
         .value_parser(value_parser!(bool))
         .long("force")
         .action(ArgAction::SetTrue)
-        .help("Force initialization even if the repository is not empty")
+        .help("Force initialization even if the repository is not empty");
+
+    let valgrind_arg = Arg::new("valgrind")
+        .long("valgrind")
+        .help("Valgrind command to start the compute node with.")
         .required(false);
 
     Command::new("Neon CLI")
@@ -1108,7 +1114,7 @@ fn cli() -> Command {
                 .about("Create a new blank timeline")
                 .arg(tenant_id_arg.clone())
                 .arg(branch_name_arg.clone())
-                .arg(region_id_arg)
+                .arg(region_id_arg.clone())
                 .arg(pg_version_arg.clone())
             )
             .subcommand(Command::new("import")
@@ -1217,6 +1223,7 @@ fn cli() -> Command {
                     .arg(safekeepers_arg)
                     .arg(remote_ext_config_args)
                     .arg(region_id_arg.clone())
+                    .arg(valgrind_arg)
                 )
                 .subcommand(
                     Command::new("stop")
