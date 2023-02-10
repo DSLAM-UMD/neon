@@ -40,6 +40,7 @@ pub struct ComputeNode {
     pub connstr: url::Url,
     pub pgdata: String,
     pub pgbin: String,
+    pub valgrind: Option<String>,
     pub spec: ComputeSpec,
     pub tenant: String,
     pub timeline: String,
@@ -238,10 +239,22 @@ impl ComputeNode {
         let pgdata_path = Path::new(&self.pgdata);
 
         // Run postgres as a child process.
-        let mut pg = Command::new(&self.pgbin)
-            .args(["-D", &self.pgdata])
-            .spawn()
-            .expect("cannot start postgres process");
+        let mut pg = if let Some(valgrind) = self.valgrind.as_ref() {
+            let mut valgrind_tok = valgrind.split_whitespace();
+            let valgrind_bin = valgrind_tok.next().expect("invalid valgrind command");
+            let mut args = valgrind_tok.collect::<Vec<_>>();
+
+            args.extend([&self.pgbin, "-D", &self.pgdata]);
+            Command::new(valgrind_bin)
+                .args(args)
+                .spawn()
+                .expect("cannot start postgres process")
+        } else {
+            Command::new(&self.pgbin)
+                .args(["-D", &self.pgdata])
+                .spawn()
+                .expect("cannot start postgres process")
+        };
 
         wait_for_postgres(&mut pg, pgdata_path)?;
 

@@ -443,31 +443,49 @@ impl PostgresNode {
         }
     }
 
-    fn pg_ctl(&self, args: &[&str], auth_token: &Option<String>) -> Result<()> {
+    fn pg_ctl(
+        &self,
+        args: &[&str],
+        auth_token: &Option<String>,
+        valgrind: Option<&String>,
+    ) -> Result<()> {
         let pg_ctl_path = self.env.pg_bin_dir(self.pg_version)?.join("pg_ctl");
-        let mut cmd = Command::new(pg_ctl_path);
-        cmd.args(
-            [
-                &[
-                    "-D",
-                    self.pgdata().to_str().unwrap(),
-                    "-l",
-                    self.pgdata().join("pg.log").to_str().unwrap(),
-                    "-w", //wait till pg_ctl actually does what was asked
-                ],
-                args,
-            ]
-            .concat(),
-        )
-        .env_clear()
-        .env(
-            "LD_LIBRARY_PATH",
-            self.env.pg_lib_dir(self.pg_version)?.to_str().unwrap(),
-        )
-        .env(
-            "DYLD_LIBRARY_PATH",
-            self.env.pg_lib_dir(self.pg_version)?.to_str().unwrap(),
-        );
+        let pgdata = self.pgdata();
+        let pgdata_pglog = pgdata.join("pg.log");
+        let pg_ctl_args = [
+            "-D",
+            pgdata.to_str().unwrap(),
+            "-l",
+            pgdata_pglog.to_str().unwrap(),
+            "-w",
+        ];
+        let mut cmd_args: Vec<&str>;
+
+        let mut cmd = if let Some(valgrind) = valgrind {
+            let mut valgrind_tok = valgrind.split_whitespace();
+            let valgrind_path = valgrind_tok.next().expect("invalid valgrind command");
+
+            cmd_args = valgrind_tok.collect();
+            cmd_args.push(pg_ctl_path.to_str().unwrap());
+            cmd_args.extend_from_slice(&pg_ctl_args);
+            Command::new(valgrind_path)
+        } else {
+            cmd_args = pg_ctl_args.to_vec();
+            Command::new(pg_ctl_path.to_str().unwrap())
+        };
+
+        cmd_args.extend_from_slice(args);
+
+        cmd.args(cmd_args)
+            .env_clear()
+            .env(
+                "LD_LIBRARY_PATH",
+                self.env.pg_lib_dir(self.pg_version)?.to_str().unwrap(),
+            )
+            .env(
+                "DYLD_LIBRARY_PATH",
+                self.env.pg_lib_dir(self.pg_version)?.to_str().unwrap(),
+            );
         if let Some(token) = auth_token {
             cmd.env("NEON_AUTH_TOKEN", token);
         }
@@ -484,7 +502,7 @@ impl PostgresNode {
         Ok(())
     }
 
-    pub fn start(&self, auth_token: &Option<String>) -> Result<()> {
+    pub fn start(&self, auth_token: &Option<String>, valgrind: Option<&String>) -> Result<()> {
         // Bail if the node already running.
         if self.status() == "running" {
             anyhow::bail!("The node is already running");
@@ -514,11 +532,11 @@ impl PostgresNode {
 
         // 4. Finally start the compute node postgres
         println!("Starting postgres node at '{}'", self.connstr());
-        self.pg_ctl(&["start"], auth_token)
+        self.pg_ctl(&["start"], auth_token, valgrind)
     }
 
-    pub fn restart(&self, auth_token: &Option<String>) -> Result<()> {
-        self.pg_ctl(&["restart"], auth_token)
+    pub fn restart(&self, auth_token: &Option<String>, valgrind: Option<&String>) -> Result<()> {
+        self.pg_ctl(&["restart"], auth_token, valgrind)
     }
 
     pub fn stop(&self, destroy: bool) -> Result<()> {
@@ -530,14 +548,14 @@ impl PostgresNode {
         // without destroy only used for testing and debugging.
         //
         if destroy {
-            self.pg_ctl(&["-m", "immediate", "stop"], &None)?;
+            self.pg_ctl(&["-m", "immediate", "stop"], &None, None)?;
             println!(
                 "Destroying postgres data directory '{}'",
                 self.pgdata().to_str().unwrap()
             );
             fs::remove_dir_all(self.pgdata())?;
         } else {
-            self.pg_ctl(&["stop"], &None)?;
+            self.pg_ctl(&["stop"], &None, None)?;
         }
         Ok(())
     }
