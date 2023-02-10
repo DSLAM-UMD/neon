@@ -65,6 +65,7 @@ fn main() -> Result<()> {
         .expect("Postgres connection string is required");
     let spec = matches.get_one::<String>("spec");
     let spec_path = matches.get_one::<String>("spec-path");
+    let valgrind = matches.get_one::<String>("valgrind");
 
     // Try to use just 'postgres' if no path is provided
     let pgbin = matches.get_one::<String>("pgbin").unwrap();
@@ -128,6 +129,7 @@ fn main() -> Result<()> {
         connstr: Url::parse(connstr).context("cannot parse connstr as a URL")?,
         pgdata: pgdata.to_string(),
         pgbin: pgbin.to_string(),
+        valgrind: valgrind.cloned(),
         spec,
         tenant,
         timeline,
@@ -230,6 +232,7 @@ fn cli() -> clap::Command {
                 .long("spec-path")
                 .value_name("SPEC_PATH"),
         )
+        .arg(Arg::new("valgrind").long("valgrind").value_name("VALGRIND"))
 }
 
 #[test]
