@@ -686,9 +686,11 @@ fn handle_pg(pg_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<()> {
                 None
             };
 
+            let valgrind = sub_args.get_one::<String>("valgrind");
+
             if let Some(node) = node {
                 println!("Starting existing postgres {node_name}...");
-                node.start(&auth_token)?;
+                node.start(&auth_token, valgrind)?;
             } else {
                 let branch_name = sub_args
                     .get_one::<String>("branch-name")
@@ -724,7 +726,7 @@ fn handle_pg(pg_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<()> {
                     pg_version,
                     region_id,
                 )?;
-                node.start(&auth_token)?;
+                node.start(&auth_token, valgrind)?;
             }
         }
         "stop" => {
@@ -982,6 +984,11 @@ fn cli() -> Command {
         .help("Specify Lsn on the timeline to start from. By default, end of the timeline would be used.")
         .required(false);
 
+    let valgrind_arg = Arg::new("valgrind")
+        .long("valgrind")
+        .help("Valgrind command to start the compute node with.")
+        .required(false);
+
     Command::new("Neon CLI")
         .arg_required_else_help(true)
         .version(GIT_VERSION)
@@ -1118,6 +1125,7 @@ fn cli() -> Command {
                     .arg(lsn_arg)
                     .arg(port_arg)
                     .arg(pg_version_arg)
+                    .arg(valgrind_arg)
                 )
                 .subcommand(
                     Command::new("stop")
