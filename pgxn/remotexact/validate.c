@@ -73,8 +73,8 @@ void validate_index_scan(RWSetRelation *rw_rel)
 
     if (page_lsn > read_csn) {
         ereport(ERROR,
-        (errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-            errmsg("read out-of-date index data from a remote partition")));
+                (errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+                 errmsg("[remotexact] read out-of-date index data from a remote partition")));
     }
 }
 
@@ -178,7 +178,7 @@ validate_table_scan(RWSetRelation *rw_rel)
             CSNLogGetCSNByXid(current_region, checked_xid) > read_csn)
             ereport(ERROR,
                     (errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-                        errmsg("read out-of-date data from a remote partition")));
+                     errmsg("[remotexact] read out-of-date data from a remote partition")));
 
     }
 
@@ -236,8 +236,8 @@ validate_tuple_scan(RWSetRelation *rw_rel)
 
         if (!valid)
             ereport(ERROR,
-                (errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-                errmsg("read out-of-date tuple data from a remote partition")));
+                    (errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+                     errmsg("[remotexact] read out-of-date tuple data from a remote partition")));
     }
 
 
