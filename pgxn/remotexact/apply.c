@@ -308,10 +308,10 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 		 * transaction.
 		 */
 		ereport(ERROR,
-			(errcode(ERRCODE_DATA_CORRUPTED),
-			errmsg("surrogate transaction did not find row to be updated "
-				   "in relation \"%s\"",
-					RelationGetRelationName(localrel))));
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("surrogate transaction did not find row to be updated "
+				   	    "in relation \"%s\"",
+					    RelationGetRelationName(localrel))));
 	}
 
 	/* Cleanup. */
@@ -402,10 +402,10 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 		 * transaction.
 		 */
 		ereport(ERROR,
-			(errcode(ERRCODE_DATA_CORRUPTED),
-			errmsg("surrogate transaction did not find row to be deleted "
-				   "in relation \"%s\"",
-					RelationGetRelationName(localrel))));
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("surrogate transaction did not find row to be deleted "
+				   	    "in relation \"%s\"",
+					    RelationGetRelationName(localrel))));
 	}
 
 	/* Cleanup. */
