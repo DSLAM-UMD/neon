@@ -91,7 +91,8 @@ static void rx_collect_delete(Relation relation, HeapTuple oldtuple);
 static void rx_execute_remote_xact(void);
 
 static CollectedRelation *get_collected_relation(Oid relid, bool create_if_not_found);
-static bool connect_to_txn_server(void);
+static bool connect_to_xact_server(void);
+static void check_for_rollback(StringInfo resp_buf);
 static int call_PQgetCopyData(PGconn *conn, char **buffer);
 static void clean_up_xact_callback(XactEvent event, void *arg);
 
@@ -434,7 +435,6 @@ rx_execute_remote_xact(void)
 	StringInfoData		buf, resp_buf;
 	int		read_len = 0;
 	int 	num_read_rels = 0;
-	int		committed;
 
 	if (rwset_collection_buffer == NULL)
 		return;
@@ -445,7 +445,8 @@ rx_execute_remote_xact(void)
 	if (header->region_set == SingleRegion(current_region))
 		return;
 
-	if (!connect_to_txn_server())
+	/* Connect to xact server if not done already */
+	if (!connect_to_xact_server())
 		return;
 
 	initStringInfo(&buf);
@@ -508,31 +509,78 @@ rx_execute_remote_xact(void)
 	/* Update the number of the read relations sent */
 	*(int *)(buf.data + buf.cursor + sizeof(int)) = pg_hton32(num_read_rels);
 
-	pq_sendbytes(&buf, rwset_collection_buffer->writes.data, rwset_collection_buffer->writes.len);
-
 	/* Send the buffer to the xact server */
+	pq_sendbytes(&buf, rwset_collection_buffer->writes.data, rwset_collection_buffer->writes.len);
 	if (PQputCopyData(XactServerConn, buf.data, buf.len) <= 0 || PQflush(XactServerConn))
 		ereport(ERROR, errmsg("[remotexact] failed to send read/write set"));
 
 	/* Read the response */
 	resp_buf.len = call_PQgetCopyData(XactServerConn, &resp_buf.data);
-	resp_buf.cursor = 0;
-	if (resp_buf.len < 0)
+
+	check_for_rollback(&resp_buf);
+
+	PQfreemem(resp_buf.data);
+}
+
+static void
+check_for_rollback(StringInfo resp_buf)
+{
+	int rollbacked_by;
+	const char *msg;
+	bool is_sql_error;
+
+	resp_buf->cursor = 0;
+	if (resp_buf->len < 0)
 	{
-		if (resp_buf.len == -1)
+		if (resp_buf->len == -1)
 			ereport(ERROR, errmsg("[remotexact] end of COPY"));
-		else if (resp_buf.len == -2)
+		else if (resp_buf->len == -2)
 			ereport(ERROR, errmsg("[remotexact] could not read COPY data: %s",
 								  PQerrorMessage(XactServerConn)));
 	}
 
-	// TODO(ctring): include more information in the response so that we can report
-	//				  the cause of abort in more details
-	committed = pq_getmsgbyte(&resp_buf);
-	PQfreemem(resp_buf.data);
+	rollbacked_by = pq_getmsgbyte(resp_buf) - 1;
+	/* The first byte is either (region_id + 1), if the transaction was rolled back or 0 otherwise */
+	if (rollbacked_by < 0)
+		return;
 
-	if (!committed)
-		ereport(ERROR, errmsg("[remotexact] validation failed or an error has occured during commit"));
+	msg = pq_getmsgstring(resp_buf);
+	is_sql_error = pq_getmsgbyte(resp_buf);
+
+	if (is_sql_error)
+	{
+		char code[5];
+		const char *severity;
+		const char *detail;
+		const char *hint;
+		StringInfoData s;
+
+		memcpy(code, pq_getmsgbytes(resp_buf, 5), 5);
+		severity = pq_getmsgstring(resp_buf);
+		detail = pq_getmsgstring(resp_buf);
+		hint = pq_getmsgstring(resp_buf);
+
+		initStringInfo(&s);
+		appendStringInfo(&s, "%s: %s.", severity, msg);
+		if (detail[0] != '\0')
+			appendStringInfo(&s, "DETAIL:  %s", detail);
+		if (hint[0] != '\0')
+			appendStringInfo(&s, "HINT:  %s", hint);
+
+		PQfreemem(resp_buf->data);
+		ereport(ERROR,
+				(errcode(MAKE_SQLSTATE(code[0], code[1], code[2], code[3], code[4])),
+				 errmsg("[remotexact] validation failed during commit"),
+				 errdetail("Region %d: \"%s\"", rollbacked_by, s.data)));
+	}
+	else
+	{
+		PQfreemem(resp_buf->data);
+		ereport(ERROR,
+				(errcode(ERRCODE_TRANSACTION_ROLLBACK),
+				 errmsg("[remotexact] an error occured during commit"),
+				 errdetail("Region %d: \"%s\"", rollbacked_by, msg)));
+	}
 }
 
 /*
@@ -616,7 +664,7 @@ get_collected_relation(Oid relid, bool create_if_not_found)
 
 // TODO(ctring): need better handling of interrupted connection / reconnection
 static bool
-connect_to_txn_server(void)
+connect_to_xact_server(void)
 {
 	PGresult   *res;
 
