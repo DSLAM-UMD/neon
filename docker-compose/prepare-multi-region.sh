@@ -75,11 +75,6 @@ elif [ "$mode" = "swarm" ]; then
     exit 1
   fi
 
-  if [ ! -z $(docker service ls -q -f name="registry") ]; then
-    echo "Service \"registry\" exists. Please stop and remove it before running this script."
-    exit 1
-  fi
-
   if [ -f "topology.json" ]; then
     echo "Found \"topology.json\". Setting labels for nodes"
     for node in $(jq -r "keys[]" topology.json); do
@@ -103,8 +98,10 @@ elif [ "$mode" = "swarm" ]; then
                         $minio_image                         \
                         server /data --address :9000 --console-address :9001
 
-  echo "Starting the local image registry"
-  docker service create --name registry --publish published=5000,target=5000 registry:2
+  if [ -z $(docker service ls -q -f name="registry") ]; then
+    echo "Starting the local image registry"
+    docker service create --name registry --publish published=5000,target=5000 registry:2
+  fi
 
 else
   echo "Invalid mode \"$mode\". Something is wrong with the script."
