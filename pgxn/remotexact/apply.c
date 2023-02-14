@@ -309,9 +309,9 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 		 */
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg("surrogate transaction did not find row to be updated "
+				 errmsg("[remotexact] surrogate transaction did not find row to be updated "
 				   	    "in relation \"%s\"",
-					    RelationGetRelationName(localrel))));
+					      RelationGetRelationName(localrel))));
 	}
 
 	/* Cleanup. */
@@ -403,9 +403,9 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 		 */
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg("surrogate transaction did not find row to be deleted "
+				 errmsg("[remotexact] surrogate transaction did not find row to be deleted "
 				   	    "in relation \"%s\"",
-					    RelationGetRelationName(localrel))));
+					      RelationGetRelationName(localrel))));
 	}
 
 	/* Cleanup. */
@@ -471,7 +471,7 @@ open_relation(LogicalRepRelId relid, LOCKMODE lockmode)
     if (!OidIsValid(relid))
         ereport(ERROR,
                 (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-                    errmsg("relation with id \"%d\" does not exist", relid)));
+                 errmsg("[remotexact] relation with id \"%d\" does not exist", relid)));
 
     return table_open(relid, lockmode);
 }
@@ -498,9 +498,9 @@ check_relation_updatable(Relation rel)
 		relreplident != REPLICA_IDENTITY_INDEX)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				errmsg("target relation \"%s\" has neither REPLICA IDENTITY "
-					   "index nor REPLICA IDENTITY FULL",
-						RelationGetRelationName(rel))));
+				 errmsg("[remotexact] target relation \"%s\" has neither REPLICA IDENTITY "
+					      "index nor REPLICA IDENTITY FULL",
+						    RelationGetRelationName(rel))));
 }
 
 /*
@@ -661,8 +661,8 @@ slot_store_data(TupleTableSlot *slot, Relation rel,
 				if (colvalue->cursor != colvalue->len)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
-							 errmsg("incorrect binary data format in logical replication column %d",
-									i + 1)));
+							 errmsg("[remotexact] incorrect binary data format in logical replication column %d",
+									    i + 1)));
 				slot->tts_isnull[i] = false;
 			}
 			else
@@ -769,8 +769,8 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 				if (colvalue->cursor != colvalue->len)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
-							 errmsg("incorrect binary data format in logical replication column %d",
-									i + 1)));
+							 errmsg("[remotexact] incorrect binary data format in logical replication column %d",
+									    i + 1)));
 				slot->tts_isnull[i] = false;
 			}
 			else
