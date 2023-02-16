@@ -339,6 +339,9 @@ pageserver_receive(int region)
 				neon_log(PageStoreTrace, "got response: %s", msg);
 				pfree(msg);
 			}
+
+			/* Remotexact */
+			set_region_lsn(region, resp);
 		}
 		else if (rc == -1)
 		{
@@ -365,8 +368,6 @@ pageserver_receive(int region)
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
-
-	set_region_lsn(region, resp);
 
 	return (NeonResponse *) resp;
 }
