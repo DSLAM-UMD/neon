@@ -75,8 +75,16 @@ typedef enum {
 
 static RWSetCollectionBuffer *rwset_collection_buffer = NULL;
 
-PGconn	   *XactServerConn;
-bool		Connected = false;
+PGconn	   *xactserver_conn;
+bool		xactserver_connected = false;
+
+/*
+ * WaitEventSet containing:
+ * - WL_SOCKET_READABLE on pageserver_conn,
+ * - WL_LATCH_SET on MyLatch, and
+ * - WL_EXIT_ON_PM_DEATH.
+ */
+WaitEventSet *xactserver_conn_wes = NULL;
 
 static void init_rwset_collection_buffer(Oid dbid);
 static void rwset_add_region(int region);
@@ -91,9 +99,10 @@ static void rx_collect_delete(Relation relation, HeapTuple oldtuple);
 static void rx_execute_remote_xact(void);
 
 static CollectedRelation *get_collected_relation(Oid relid, bool create_if_not_found);
-static bool connect_to_xact_server(void);
+static void xactserver_connect(void);
+static void xactserver_disconnect(void);
 static void check_for_rollback(StringInfo resp_buf);
-static int call_PQgetCopyData(PGconn *conn, char **buffer);
+static int call_PQgetCopyData(char **buffer);
 static void clean_up_xact_callback(XactEvent event, void *arg);
 
 static void
@@ -432,7 +441,7 @@ rx_execute_remote_xact(void)
 	RWSetHeader			*header;
 	CollectedRelation	*relation;
 	HASH_SEQ_STATUS		status;
-	StringInfoData		buf, resp_buf;
+	StringInfoData		buf;
 	int		read_len = 0;
 	int 	num_read_rels = 0;
 
@@ -446,8 +455,8 @@ rx_execute_remote_xact(void)
 		return;
 
 	/* Connect to xact server if not done already */
-	if (!connect_to_xact_server())
-		return;
+	if (!xactserver_connected)
+		xactserver_connect();
 
 	initStringInfo(&buf);
 
@@ -511,15 +520,45 @@ rx_execute_remote_xact(void)
 
 	/* Send the buffer to the xact server */
 	pq_sendbytes(&buf, rwset_collection_buffer->writes.data, rwset_collection_buffer->writes.len);
-	if (PQputCopyData(XactServerConn, buf.data, buf.len) <= 0 || PQflush(XactServerConn))
-		ereport(ERROR, errmsg("[remotexact] failed to send read/write set"));
+	if (PQputCopyData(xactserver_conn, buf.data, buf.len) <= 0 || PQflush(xactserver_conn))
+	{
+		char *msg = pchomp(PQerrorMessage(xactserver_conn));
+
+		xactserver_disconnect();
+		ereport(ERROR, errmsg("[remotexact] failed to send read/write set: %s", msg));
+	}
 
 	/* Read the response */
-	resp_buf.len = call_PQgetCopyData(XactServerConn, &resp_buf.data);
+	PG_TRY();
+	{
+		StringInfoData resp_buf;
+		int	rc;
 
-	check_for_rollback(&resp_buf);
+		rc = call_PQgetCopyData(&resp_buf.data);
+		if (rc >= 0)
+		{
+			resp_buf.len = rc;
+			resp_buf.cursor = 0;
+	
+			check_for_rollback(&resp_buf);
 
-	PQfreemem(resp_buf.data);
+			PQfreemem(resp_buf.data);
+		}
+		else if (rc == -1)
+		{
+			xactserver_disconnect();
+		}
+		else if (rc == -2)
+			ereport(ERROR, errmsg("[remotexact] could not read COPY data: %s", PQerrorMessage(xactserver_conn)));
+		else
+			ereport(ERROR, errmsg("[remotexact] unexpected PGgetCopyData return value: %d", rc));
+	}
+	PG_CATCH();
+	{
+		xactserver_disconnect();
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 }
 
 static void
@@ -528,16 +567,6 @@ check_for_rollback(StringInfo resp_buf)
 	int rollbacked_by;
 	const char *msg;
 	bool is_sql_error;
-
-	resp_buf->cursor = 0;
-	if (resp_buf->len < 0)
-	{
-		if (resp_buf->len == -1)
-			ereport(ERROR, errmsg("[remotexact] end of COPY"));
-		else if (resp_buf->len == -2)
-			ereport(ERROR, errmsg("[remotexact] could not read COPY data: %s",
-								  PQerrorMessage(XactServerConn)));
-	}
 
 	rollbacked_by = pq_getmsgbyte(resp_buf) - 1;
 	/* The first byte is either (region_id + 1), if the transaction was rolled back or 0 otherwise */
@@ -589,34 +618,29 @@ check_for_rollback(StringInfo resp_buf)
  * Taken from neon/libpagestore.c
  */
 static int
-call_PQgetCopyData(PGconn *conn, char **buffer)
+call_PQgetCopyData(char **buffer)
 {
 	int			ret;
 
 retry:
-	ret = PQgetCopyData(conn, buffer, 1 /* async */ );
+	ret = PQgetCopyData(xactserver_conn, buffer, 1 /* async */ );
 
 	if (ret == 0)
 	{
-		int			wc;
+		WaitEvent	event;
 
 		/* Sleep until there's something to do */
-		wc = WaitLatchOrSocket(MyLatch,
-							   WL_LATCH_SET | WL_SOCKET_READABLE |
-							   WL_EXIT_ON_PM_DEATH,
-							   PQsocket(conn),
-							   -1L, PG_WAIT_EXTENSION);
+		(void) WaitEventSetWait(xactserver_conn_wes, -1L, &event, 1, PG_WAIT_EXTENSION);
 		ResetLatch(MyLatch);
 
 		CHECK_FOR_INTERRUPTS();
 
 		/* Data available in socket? */
-		if (wc & WL_SOCKET_READABLE)
+		if (event.events & WL_SOCKET_READABLE)
 		{
-			if (!PQconsumeInput(conn))
-				ereport(ERROR,
-						errmsg("[remotexact] could not get response from xactserver: %s",
-								PQerrorMessage(conn)));
+			if (!PQconsumeInput(xactserver_conn))
+				ereport(ERROR, errmsg("could not get response from xactserver: %s",
+									  PQerrorMessage(xactserver_conn)));
 		}
 
 		goto retry;
@@ -662,55 +686,98 @@ get_collected_relation(Oid relid, bool create_if_not_found)
 	return relation;
 }
 
-// TODO(ctring): need better handling of interrupted connection / reconnection
-static bool
-connect_to_xact_server(void)
+static void
+xactserver_connect(void)
 {
-	PGresult   *res;
+	int ret;
 
-	/* Reconnect if the connection is bad for some reason */
-	if (Connected && PQstatus(XactServerConn) == CONNECTION_BAD)
+	Assert(!xactserver_connected);
+
+	xactserver_conn = PQconnectdb(remotexact_connstring);
+	if (PQstatus(xactserver_conn) == CONNECTION_BAD)
 	{
-		PQfinish(XactServerConn);
-		XactServerConn = NULL;
-		Connected = false;
+		char	*msg = pchomp(PQerrorMessage(xactserver_conn));
 
-		ereport(LOG, errmsg("[remotexact] connection to transaction server broken, reconnecting..."));
-	}
-
-	if (Connected)
-	{
-		ereport(LOG, errmsg("[remotexact] reuse existing connection to transaction server"));
-		return true;
-	}
-
-	XactServerConn = PQconnectdb(remotexact_connstring);
-
-	if (PQstatus(XactServerConn) == CONNECTION_BAD)
-	{
-		char	   *msg = pchomp(PQerrorMessage(XactServerConn));
-
-		PQfinish(XactServerConn);
-		ereport(WARNING,
-				errmsg("[remotexact] could not connect to the transaction server"),
-				errdetail_internal("%s", msg));
-		return Connected;
+		PQfinish(xactserver_conn);
+		xactserver_conn = NULL;
+		
+		ereport(ERROR,
+				(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
+				 errmsg("[remotexact] could not establish connection to xactserver"),
+				 errdetail_internal("%s", msg)));
 	}
 
 	/* TODO(ctring): send a more useful starting message */
-	res = PQexec(XactServerConn, "start");
-	if (PQresultStatus(res) != PGRES_COPY_BOTH)
+	ret = PQsendQuery(xactserver_conn, "start");
+	if (ret != 1)
 	{
-		ereport(WARNING, errmsg("[remotexact] invalid response from transaction server"));
-		return Connected;
+		PQfinish(xactserver_conn);
+		xactserver_conn = NULL;
+		ereport(ERROR, errmsg("[remotexact] could not send start command to xactserver"));
 	}
-	PQclear(res);
 
-	Connected = true;
+	xactserver_conn_wes = CreateWaitEventSet(TopMemoryContext, 3);
+	AddWaitEventToSet(xactserver_conn_wes, WL_LATCH_SET, PGINVALID_SOCKET,
+			  MyLatch, NULL);
+	AddWaitEventToSet(xactserver_conn_wes, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
+			  NULL, NULL);
+	AddWaitEventToSet(xactserver_conn_wes, WL_SOCKET_READABLE, PQsocket(xactserver_conn), NULL, NULL);
 
-	ereport(LOG, errmsg("[remotexact] connected to transaction server"));
+	while (PQisBusy(xactserver_conn))
+	{
+		WaitEvent	event;
 
-	return Connected;
+		/* Sleep until there's something to do */
+		(void) WaitEventSetWait(xactserver_conn_wes, -1L, &event, 1, PG_WAIT_EXTENSION);
+		ResetLatch(MyLatch);
+
+		CHECK_FOR_INTERRUPTS();
+
+		/* Data available in socket? */
+		if (event.events & WL_SOCKET_READABLE)
+		{
+			if (!PQconsumeInput(xactserver_conn))
+			{
+				char	   *msg = pchomp(PQerrorMessage(xactserver_conn));
+
+				PQfinish(xactserver_conn);
+				xactserver_conn = NULL;
+				FreeWaitEventSet(xactserver_conn_wes);
+				xactserver_conn_wes = NULL;
+
+				ereport(ERROR, errmsg("[remotexact] could not complete handshake with pageserver: %s",
+									  msg));
+			}
+		}
+	}
+
+	ereport(LOG, errmsg("[remotexact] connected to '%s'", remotexact_connstring));
+
+	xactserver_connected = true;
+}
+
+static void
+xactserver_disconnect(void)
+{
+	/*
+	 * If anything goes wrong while we were sending a request, it's not clear
+	 * what state the connection is in. For example, if we sent the request
+	 * but didn't receive a response yet, we might receive the response some
+	 * time later after we have already sent a new unrelated request. Close
+	 * the connection to avoid getting confused.
+	 */
+	if (xactserver_connected)
+	{
+		ereport(LOG, errmsg("[remotexact] dropping connection to page server due to error"));
+		PQfinish(xactserver_conn);
+		xactserver_conn = NULL;
+		xactserver_connected = false;
+	}
+	if (xactserver_conn_wes != NULL)
+	{
+		FreeWaitEventSet(xactserver_conn_wes);
+		xactserver_conn_wes = NULL;
+	}
 }
 
 static void
@@ -771,7 +838,6 @@ _PG_init(void)
 		SetRemoteXactHook(&remote_xact_hook);
 		RegisterXactCallback(clean_up_xact_callback, NULL);
 
-		ereport(LOG, errmsg("[remotexact] initialized"));
 		ereport(LOG, errmsg("[remotexact] xactserver connection string \"%s\"", remotexact_connstring));
 	}
 }
