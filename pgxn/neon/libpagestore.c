@@ -121,10 +121,7 @@ pageserver_connect(int elevel)
 	}
 
 	if (IsMultiRegion())
-	{
-		neon_log(LOG, "multi-region enabled");
 		query = psprintf("multipagestream %s", neon_tenant);
-	}
 	else
 		query = psprintf("pagestream %s %s", neon_tenant, neon_timeline);
 
@@ -173,6 +170,8 @@ pageserver_connect(int elevel)
 		}
 	}
 
+	if (IsMultiRegion())
+		neon_log(LOG, "libpagestore: multi-region enabled");
 	neon_log(LOG, "libpagestore: connected to '%s'", page_server_connstring);
 
 	connected = true;

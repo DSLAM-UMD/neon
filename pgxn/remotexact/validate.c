@@ -229,7 +229,6 @@ validate_tuple_scan(RWSetRelation *rw_rel)
             if (TransactionIdIsValid(xmin) &&
                 CSNLogGetCSNByXid(current_region, xmin) > read_csn)
                 valid = false;
-            
 
             ReleaseBuffer(buf);
         }
