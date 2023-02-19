@@ -317,6 +317,7 @@ compact_prefetch_buffers(void)
 		Assert(target_slot->status == PRFS_UNUSED);
 
 		target_slot->buftag = source_slot->buftag;
+		target_slot->region = source_slot->region;
 		target_slot->status = source_slot->status;
 		target_slot->response = source_slot->response;
 		target_slot->effective_request_lsn = source_slot->effective_request_lsn;
@@ -333,6 +334,7 @@ compact_prefetch_buffers(void)
 		/* empty the moved slot */
 		source_slot->status = PRFS_UNUSED;
 		source_slot->buftag = (BufferTag) {0};
+		source_slot->region = UNKNOWN_REGION;
 		source_slot->response = NULL;
 		source_slot->my_ring_index = 0;
 		source_slot->effective_request_lsn = 0;
