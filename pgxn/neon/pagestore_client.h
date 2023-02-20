@@ -34,12 +34,14 @@ typedef enum
 	T_NeonGetPageRequest,
 	T_NeonDbSizeRequest,
 	T_NeonGetSlruPageRequest,
+	T_NeonGetLatestLsnRequest,
 
 	/* pagestore -> pagestore_client */
 	T_NeonExistsResponse = 100,
 	T_NeonNblocksResponse,
 	T_NeonGetPageResponse,
 	T_NeonGetSlruPageResponse,
+	T_NeonGetLatestLsnResponse,
 	T_NeonErrorResponse,
 	T_NeonDbSizeResponse,
 }			NeonMessageTag;
@@ -119,6 +121,11 @@ typedef struct
 	bool check_exists_only;
 } NeonGetSlruPageRequest;
 
+typedef struct
+{
+	NeonRequest req;
+} NeonGetLatestLsnRequest;
+
 /* supertype of all the Neon*Response structs below */
 typedef struct
 {
@@ -163,6 +170,12 @@ typedef struct
 	bool		page_exists;
 	char		page[FLEXIBLE_ARRAY_MEMBER];
 } NeonGetSlruPageResponse;
+
+typedef struct
+{
+	NeonMessageTag tag;
+	XLogRecPtr lsn;
+} NeonGetLatestLsnResponse;
 
 typedef struct
 {
@@ -249,11 +262,14 @@ extern bool lfc_cache_contains(RelFileNode rnode, ForkNumber forkNum, BlockNumbe
 extern void lfc_evict(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno);
 extern void lfc_init(void);
 
-/* neon SLRU functionality */
+/* Remotexact - neon SLRU functionality */
 extern const char *slru_kind_to_string(NeonSlruKind kind);
 extern bool slru_kind_from_string(const char* str, NeonSlruKind* kind);
 extern bool neon_slru_kind_check(SlruCtl ctl);
 extern bool neon_slru_read_page(SlruCtl ctl, int segno, BlockNumber blkno, XLogRecPtr min_lsn, char *buffer);
 extern bool neon_slru_page_exists(SlruCtl ctl, int segno, BlockNumber blkno);
+
+/* Remotexact - used for tracking lsns of different regions */
+extern XLogRecPtr neon_get_latest_lsn(int region);
 
 #endif
