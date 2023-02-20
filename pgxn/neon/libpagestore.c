@@ -313,9 +313,6 @@ pageserver_receive(int region)
 				neon_log(PageStoreTrace, "got response: %s", msg);
 				pfree(msg);
 			}
-
-			/* Remotexact */
-			set_region_lsn(region, resp);
 		}
 		else if (rc == -1)
 		{
@@ -616,4 +613,5 @@ pg_init_libpagestore(void)
 
 	get_region_lsn_hook = get_region_lsn;
 	get_all_region_lsns_hook = get_all_region_lsns;
+	clear_region_lsns();
 }

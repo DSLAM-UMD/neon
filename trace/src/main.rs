@@ -74,6 +74,7 @@ fn analyze_trace<R: std::io::Read>(mut reader: R) {
                 prev = Some(req);
             }
             PagestreamFeMessage::GetSlruPage(_) => {}
+            PagestreamFeMessage::GetLatestLsn(_) => {}
             PagestreamFeMessage::DbSize(_) => {}
         };
     }
