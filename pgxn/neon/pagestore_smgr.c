@@ -966,12 +966,23 @@ nm_pack_request(NeonRequest * msg)
 
 				break;
 			}
+		
+		case T_NeonGetLatestLsnRequest:
+			{
+				NeonGetLatestLsnRequest *msg_req = (NeonGetLatestLsnRequest *) msg;
+
+				pq_sendint8(&s, msg_req->req.region);
+
+				break;
+			}
+
 
 			/* pagestore -> pagestore_client. We never need to create these. */
 		case T_NeonExistsResponse:
 		case T_NeonNblocksResponse:
 		case T_NeonGetPageResponse:
 		case T_NeonGetSlruPageResponse:
+		case T_NeonGetLatestLsnResponse:
 		case T_NeonErrorResponse:
 		case T_NeonDbSizeResponse:
 		default:
@@ -1060,6 +1071,17 @@ nm_unpack_response(StringInfo s)
 					memcpy(msg_resp->page, pq_getmsgbytes(s, BLCKSZ), BLCKSZ);
 				}
 				pq_getmsgend(s);
+
+				resp = (NeonResponse *) msg_resp;
+				break;
+			}
+		
+		case T_NeonGetLatestLsnResponse:
+			{
+				NeonGetLatestLsnResponse *msg_resp = palloc0(sizeof(NeonGetLatestLsnResponse));
+
+				msg_resp->tag = tag;
+				msg_resp->lsn = pq_getmsgint64(s);
 
 				resp = (NeonResponse *) msg_resp;
 				break;
@@ -1191,6 +1213,16 @@ nm_to_string(NeonMessage * msg)
 				break;
 			}
 
+		case T_NeonGetLatestLsnRequest:
+			{
+				NeonGetLatestLsnRequest *msg_req = (NeonGetLatestLsnRequest *) msg;
+
+				appendStringInfoString(&s, "{\"type\": \"NeonGetLatestLsnRequest\"");
+				appendStringInfo(&s, ", \"region\": %d", msg_req->req.region);
+				appendStringInfoChar(&s, '}');
+				break;
+			}
+
 			/* pagestore -> pagestore_client */
 		case T_NeonExistsResponse:
 			{
@@ -1236,6 +1268,15 @@ nm_to_string(NeonMessage * msg)
 				appendStringInfo(&s, ", \"seg_exists\": %d", msg_resp->seg_exists);
 				appendStringInfo(&s, ", \"page_exists\": %d", msg_resp->page_exists);
 				appendStringInfo(&s, ", \"page\": \"XXX\"}");
+				appendStringInfoChar(&s, '}');
+				break;
+			}
+		case T_NeonGetLatestLsnResponse:
+			{
+				NeonGetLatestLsnResponse *msg_resp = (NeonGetLatestLsnResponse *) msg;
+
+				appendStringInfoString(&s, "{\"type\": \"NeonGetLatestLsnResponse\"");
+				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_resp->lsn));
 				appendStringInfoChar(&s, '}');
 				break;
 			}
@@ -2944,9 +2985,9 @@ neon_redo_read_buffer_filter(XLogReaderState *record, uint8 block_id)
 	return no_redo_needed;
 }
 
-/*
- * SLRU stuff
- */
+/**************************************
+ * 			Remotexact stuff
+ **************************************/
 
 const char *
 slru_kind_to_string(NeonSlruKind kind)
@@ -3168,7 +3209,8 @@ neon_slru_page_exists(SlruCtl ctl, int segno, BlockNumber blkno)
 	{
 		case T_NeonGetSlruPageResponse:
 			exists = ((NeonGetSlruPageResponse *) resp)->page_exists;
-			break;
+			pfree(resp);
+			return exists;
 
 		case T_NeonErrorResponse:
 			ereport(ERROR,
@@ -3188,7 +3230,40 @@ neon_slru_page_exists(SlruCtl ctl, int segno, BlockNumber blkno)
 			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
 	}
 
-	pfree(resp);
-
-	return exists;
+	pg_unreachable();
 } 
+
+XLogRecPtr
+neon_get_latest_lsn(int region)
+{
+	NeonResponse	*resp;
+	XLogRecPtr		latest_lsn;
+	NeonGetLatestLsnRequest request = {
+		.req.tag = T_NeonGetLatestLsnRequest,
+		.req.region = region,
+	};
+
+	resp = page_server_request(&request);
+
+	switch (resp->tag)
+	{
+		case T_NeonGetLatestLsnResponse:
+			latest_lsn = ((NeonGetLatestLsnResponse *) resp)->lsn;
+			pfree(resp);
+			return latest_lsn;
+
+		case T_NeonErrorResponse:
+			ereport(ERROR,
+					(errcode(ERRCODE_IO_ERROR),
+					 errmsg("could not get the latest lsn for region %d from the page server",
+							region),
+					 errdetail("page server returned error: %s",
+							   ((NeonErrorResponse *) resp)->message)));
+			break;
+
+		default:
+			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
+	}
+
+	pg_unreachable();
+}

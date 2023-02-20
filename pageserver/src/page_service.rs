@@ -18,9 +18,9 @@ use pageserver_api::models::TenantState;
 use pageserver_api::models::{
     PagestreamBeMessage, PagestreamDbSizeRequest, PagestreamDbSizeResponse,
     PagestreamErrorResponse, PagestreamExistsRequest, PagestreamExistsResponse,
-    PagestreamFeMessage, PagestreamGetPageRequest, PagestreamGetPageResponse,
-    PagestreamGetSlruPageRequest, PagestreamGetSlruPageResponse, PagestreamNblocksRequest,
-    PagestreamNblocksResponse,
+    PagestreamFeMessage, PagestreamGetLatestLsnResponse, PagestreamGetPageRequest,
+    PagestreamGetPageResponse, PagestreamGetSlruPageRequest, PagestreamGetSlruPageResponse,
+    PagestreamNblocksRequest, PagestreamNblocksResponse,
 };
 use postgres_backend::{self, is_expected_io_error, AuthType, PostgresBackend, QueryError};
 use pq_proto::framed::ConnectionError;
@@ -314,6 +314,7 @@ struct PageRequestMetrics {
     get_page_at_lsn: metrics::Histogram,
     get_db_size: metrics::Histogram,
     get_slru_page: metrics::Histogram,
+    get_latest_lsn: metrics::Histogram,
 }
 
 impl PageRequestMetrics {
@@ -336,12 +337,16 @@ impl PageRequestMetrics {
         let get_slru_page =
             SMGR_QUERY_TIME.with_label_values(&["get_slru_page", &tenant_id, &timeline_id]);
 
+        let get_latest_lsn =
+            SMGR_QUERY_TIME.with_label_values(&["get_latest_lsn", &tenant_id, &timeline_id]);
+
         Self {
             get_rel_exists,
             get_rel_size,
             get_page_at_lsn,
             get_db_size,
             get_slru_page,
+            get_latest_lsn,
         }
     }
 }
@@ -512,6 +517,13 @@ impl PageServerHandler {
                             self.handle_get_slru_page_at_lsn_request(&timeline, &req, &ctx)
                                 .await
                         }
+                        Err(e) => Err(e),
+                    }
+                }
+                PagestreamFeMessage::GetLatestLsn(req) => {
+                    let _timer = metrics.get_latest_lsn.start_timer();
+                    match get_timeline_by_region_id(&timelines, req.region) {
+                        Ok(timeline) => self.handle_get_latest_lsn_request(&timeline, &ctx).await,
                         Err(e) => Err(e),
                     }
                 }
@@ -855,6 +867,21 @@ impl PageServerHandler {
                 seg_exists,
                 page,
             },
+        ))
+    }
+
+    #[instrument(skip(self, timeline, ctx), fields(region = %timeline.region_id))]
+    async fn handle_get_latest_lsn_request(
+        &self,
+        timeline: &Timeline,
+        ctx: &RequestContext,
+    ) -> anyhow::Result<PagestreamBeMessage> {
+        let latest_gc_cutoff_lsn = timeline.get_latest_gc_cutoff_lsn();
+        let lsn =
+            Self::wait_or_get_last_lsn(timeline, Lsn(0), true, &latest_gc_cutoff_lsn, ctx).await?;
+
+        Ok(PagestreamBeMessage::GetLatestLsn(
+            PagestreamGetLatestLsnResponse { lsn },
         ))
     }
 
