@@ -438,6 +438,7 @@ pub enum PagestreamFeMessage {
     GetPage(PagestreamGetPageRequest),
     DbSize(PagestreamDbSizeRequest),
     GetSlruPage(PagestreamGetSlruPageRequest),
+    GetLatestLsn(PagestreamGetLatestLsnRequest),
 }
 
 // Wrapped in libpq CopyData
@@ -446,6 +447,7 @@ pub enum PagestreamBeMessage {
     Nblocks(PagestreamNblocksResponse),
     GetPage(PagestreamGetPageResponse),
     GetSlruPage(PagestreamGetSlruPageResponse),
+    GetLatestLsn(PagestreamGetLatestLsnResponse),
     Error(PagestreamErrorResponse),
     DbSize(PagestreamDbSizeResponse),
 }
@@ -493,6 +495,11 @@ pub struct PagestreamGetSlruPageRequest {
     pub check_exists_only: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct PagestreamGetLatestLsnRequest {
+    pub region: RegionId,
+}
+
 #[derive(Debug)]
 pub struct PagestreamExistsResponse {
     pub lsn: Lsn,
@@ -516,6 +523,11 @@ pub struct PagestreamGetSlruPageResponse {
     pub lsn: Lsn,
     pub seg_exists: bool,
     pub page: Option<Bytes>,
+}
+
+#[derive(Debug)]
+pub struct PagestreamGetLatestLsnResponse {
+    pub lsn: Lsn,
 }
 
 #[derive(Debug)]
@@ -576,7 +588,7 @@ impl PagestreamFeMessage {
             }
 
             Self::GetSlruPage(req) => {
-                bytes.put_u8(4); /* tag from pagestore_client.h */
+                bytes.put_u8(4);
                 bytes.put_u8(u8::from(req.latest));
                 bytes.put_u64(req.lsn.0);
                 bytes.put_u8(req.region.0);
@@ -584,6 +596,11 @@ impl PagestreamFeMessage {
                 bytes.put_u32(req.segno);
                 bytes.put_u32(req.blkno);
                 bytes.put_u8(u8::from(req.check_exists_only));
+            }
+
+            Self::GetLatestLsn(req) => {
+                bytes.put_u8(5);
+                bytes.put_u8(req.region.0);
             }
         }
 
@@ -649,6 +666,11 @@ impl PagestreamFeMessage {
                     check_exists_only: body.read_u8()? != 0,
                 },
             )),
+            5 => Ok(PagestreamFeMessage::GetLatestLsn(
+                PagestreamGetLatestLsnRequest {
+                    region: RegionId(body.read_u8()?),
+                },
+            )),
             _ => bail!("unknown smgr message tag: {:?}", msg_tag),
         }
     }
@@ -689,13 +711,18 @@ impl PagestreamBeMessage {
                 }
             }
 
-            Self::Error(resp) => {
+            Self::GetLatestLsn(resp) => {
                 bytes.put_u8(104); /* tag from pagestore_client.h */
+                bytes.put_u64(resp.lsn.0);
+            }
+
+            Self::Error(resp) => {
+                bytes.put_u8(105); /* tag from pagestore_client.h */
                 bytes.put(resp.message.as_bytes());
                 bytes.put_u8(0); // null terminator
             }
             Self::DbSize(resp) => {
-                bytes.put_u8(105); /* tag from pagestore_client.h */
+                bytes.put_u8(106); /* tag from pagestore_client.h */
                 bytes.put_u64(resp.lsn.0);
                 bytes.put_i64(resp.db_size);
             }
