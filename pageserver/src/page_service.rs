@@ -420,8 +420,12 @@ impl PageServerHandler {
                     .map_err(|e| anyhow::anyhow!(e))?,
             )])
         } else {
+            // Remotexact
             get_timelines_indexed_by_region_id(&tenant)?
         };
+
+        // Remotexact
+        let main_timeline = get_timeline_by_region_id(&timelines, RegionId(0)).unwrap();
 
         // switch client to COPYBOTH
         pgb.write_message_noflush(&BeMessage::CopyBothResponse)?;
@@ -473,32 +477,68 @@ impl PageServerHandler {
             // TODO: We could create a new per-request context here, with unique ID.
             // Currently we use the same per-timeline context for all requests
 
+            // Remotexact: We assume that a relation can only be moved once while it is empty from the
+            // main region, where it is created, to a new region.
+            // After the move, timeline of the new region does not know about the existence of the
+            // pages of the relation, resulting in an error in the pageserver (even if the page is empty).
+            // We thus fallback to the main region in that case.
+            // Note that the compute node generally only logs the changes on the page, not the whole page.
+            // This is why the relation must be empty when it is moved, otherwise the new region will lose
+            // the data added to the relation prior to the move.
             let response = match neon_fe_msg {
-                PagestreamFeMessage::Exists(req) => {
+                PagestreamFeMessage::Exists(mut req) => {
                     let _timer = metrics.get_rel_exists.start_timer();
                     match get_timeline_by_region_id(&timelines, req.region) {
                         Ok(timeline) => {
-                            self.handle_get_rel_exists_request(timeline.as_ref(), &req, &ctx)
+                            match self
+                                .handle_get_rel_exists_request(timeline.as_ref(), &req, &ctx)
                                 .await
+                            {
+                                res @ Ok(_) => res,
+                                Err(_) => {
+                                    req.latest = true;
+                                    req.lsn = Lsn(0);
+                                    self.handle_get_rel_exists_request(&main_timeline, &req, &ctx)
+                                        .await
+                                }
+                            }
                         }
                         Err(e) => Err(e),
                     }
                 }
-                PagestreamFeMessage::Nblocks(req) => {
+                PagestreamFeMessage::Nblocks(mut req) => {
                     let _timer = metrics.get_rel_size.start_timer();
                     match get_timeline_by_region_id(&timelines, req.region) {
                         Ok(timeline) => {
-                            self.handle_get_nblocks_request(&timeline, &req, &ctx).await
+                            match self.handle_get_nblocks_request(&timeline, &req, &ctx).await {
+                                res @ Ok(_) => res,
+                                Err(_) => {
+                                    req.latest = true;
+                                    req.lsn = Lsn(0);
+                                    self.handle_get_nblocks_request(&main_timeline, &req, &ctx)
+                                        .await
+                                }
+                            }
                         }
                         Err(e) => Err(e),
                     }
                 }
-                PagestreamFeMessage::GetPage(req) => {
+                PagestreamFeMessage::GetPage(mut req) => {
                     let _timer = metrics.get_page_at_lsn.start_timer();
                     match get_timeline_by_region_id(&timelines, req.region) {
                         Ok(timeline) => {
-                            self.handle_get_page_at_lsn_request(&timeline, &req, &ctx)
+                            match self
+                                .handle_get_page_at_lsn_request(&timeline, &req, &ctx)
                                 .await
+                            {
+                                res @ Ok(_) => res,
+                                Err(_) => {
+                                    req.latest = true;
+                                    req.lsn = Lsn(0);
+                                    self.handle_get_page_at_lsn_request(&main_timeline, &req, &ctx)
+                                        .await
+                                }
+                            }
                         }
                         Err(e) => Err(e),
                     }
@@ -1519,5 +1559,5 @@ fn get_timeline_by_region_id(
     index
         .get(&region_id)
         .map(Arc::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("Region {} does not exists", region_id))
+        .ok_or_else(|| anyhow::anyhow!("region {} does not exists", region_id))
 }
