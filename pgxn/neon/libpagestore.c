@@ -55,8 +55,6 @@ char	   *neon_tenant;
 int32		max_cluster_size;
 char	   *page_server_connstring;
 char	   *neon_auth_token;
-bool		neon_slru_clog;
-bool		neon_slru_multixact;
 bool		neon_slru_csnlog;
 
 int			readahead_buffer_size = 128;
@@ -476,24 +474,6 @@ pg_init_libpagestore(void)
 							0,	/* no flags required */
 							NULL, (GucIntAssignHook) &readahead_buffer_resize, NULL);
 
-	DefineCustomBoolVariable("neon.slru_clog",
-							 "read clog from the page server",
-							 NULL,
-							 &neon_slru_clog,
-							 false,
-							 PGC_POSTMASTER,
-							 0, /* no flags required */
-							 NULL, NULL, NULL);
-
-	DefineCustomBoolVariable("neon.slru_multixact",
-							 "read multixact from the page server",
-							 NULL,
-							 &neon_slru_multixact,
-							 false,
-							 PGC_POSTMASTER,
-							 0, /* no flags required */
-							 NULL, NULL, NULL);
-
 	DefineCustomBoolVariable("neon.slru_csnlog",
 							 "read csnlog from the page server",
 							 NULL,
@@ -527,7 +507,7 @@ pg_init_libpagestore(void)
 	}
 	lfc_init();
 
-	slru_kind_check_hook = neon_slru_kind_check;
+	slru_is_remote_page_hook = neon_slru_is_remote_page;
 	slru_read_page_hook = neon_slru_read_page;
 	slru_page_exists_hook = neon_slru_page_exists;
 
