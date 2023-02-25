@@ -545,9 +545,7 @@ rx_execute_remote_xact(void)
 			PQfreemem(resp_buf.data);
 		}
 		else if (rc == -1)
-		{
-			xactserver_disconnect();
-		}
+			ereport(ERROR, errmsg("[remotexact] connection closed by xactserver"));
 		else if (rc == -2)
 			ereport(ERROR, errmsg("[remotexact] could not read COPY data: %s", PQerrorMessage(xactserver_conn)));
 		else
