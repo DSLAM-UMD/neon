@@ -426,7 +426,7 @@ rx_collect_delete(Relation relation, HeapTuple oldtuple)
 	oldslot = MakeTupleTableSlot(RelationGetDescr(relation), &TTSOpsHeapTuple);
 	ExecStoreHeapTuple(oldtuple, oldslot, false);
 	/* Encode the delete using the logical replication protocol */
-	logicalrep_write_delete(buf, InvalidTransactionId, relation, oldslot, true /* binary */);
+	logicalrep_write_delete(buf, InvalidTransactionId, relation, oldslot, true /* binary */, NULL /* columns */);
 #else
 	/* Encode the delete using the logical replication protocol */
 	logicalrep_write_delete(buf, InvalidTransactionId, relation, oldtuple, true /* binary */);
