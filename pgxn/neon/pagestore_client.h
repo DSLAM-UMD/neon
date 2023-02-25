@@ -265,7 +265,7 @@ extern void lfc_init(void);
 /* Remotexact - neon SLRU functionality */
 extern const char *slru_kind_to_string(NeonSlruKind kind);
 extern bool slru_kind_from_string(const char* str, NeonSlruKind* kind);
-extern bool neon_slru_kind_check(SlruCtl ctl);
+extern bool neon_slru_is_remote_page(SlruCtl ctl, BlockNumber blkno);
 extern bool neon_slru_read_page(SlruCtl ctl, int segno, BlockNumber blkno, XLogRecPtr min_lsn, char *buffer);
 extern bool neon_slru_page_exists(SlruCtl ctl, int segno, BlockNumber blkno);
 

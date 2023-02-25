@@ -3033,34 +3033,19 @@ slru_kind_from_string(const char* str, NeonSlruKind* kind)
 	return false;
 }
 
+#define BlockNumberToRegion(blkno) (blkno % MAX_REGIONS)
+
 /**
- * neon_slru_kind_check() - Check if the SLRU kind is supported by the pageserver
+ * neon_slru_is_remote_page() - Check if the SLRU kind is supported by the pageserver
  */
 bool
-neon_slru_kind_check(SlruCtl ctl)
+neon_slru_is_remote_page(SlruCtl ctl, BlockNumber blkno)
 {
 	const char *dir = ctl->Dir;
+	int region = BlockNumberToRegion(blkno);
 
-	if (strcmp(dir, "pg_xact") == 0 && neon_slru_clog)
-	{
-		return true;
-	}
-
-	if ((strcmp(dir, "pg_multixact/members") == 0 || strcmp(dir, "pg_multixact/offsets") == 0) &&
-		neon_slru_multixact)
-	{
-		return true;
-	}
-
-	if (strcmp(dir, "pg_csn") == 0 && neon_slru_csnlog) 
-	{
-		return true;
-	}
-
-	return false;
+	return neon_slru_csnlog && RegionIsRemote(region) && strcmp(dir, "pg_csn") == 0;
 }
-
-#define BlockNumberToRegion(blkno) (blkno % MAX_REGIONS)
 
 /**
  * neon_slru_read_page() -- Read the specified block from a Simple LRU.
@@ -3089,7 +3074,7 @@ neon_slru_read_page(SlruCtl ctl, int segno, BlockNumber blkno, XLogRecPtr lsn, c
 	if (lsn == InvalidXLogRecPtr) {
         request_lsn =
             neon_get_request_lsn(&latest, region, dummy_node, MAIN_FORKNUM,
-                                REL_METADATA_PSEUDO_BLOCKNO);
+                                 REL_METADATA_PSEUDO_BLOCKNO);
     }
 	/**
 	 * During recovery, if there is no WAL redoing, the function GetXLogReplayRecPtr will return
