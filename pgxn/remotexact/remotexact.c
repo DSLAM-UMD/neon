@@ -6,6 +6,7 @@
 #include "fmgr.h"
 #include "libpq-fe.h"
 #include "libpq/pqformat.h"
+#include "log.h"
 #include "replication/logicalproto.h"
 #include "rwset.h"
 #include "storage/latch.h"
@@ -286,8 +287,8 @@ rx_collect_insert(Relation relation, HeapTuple newtuple)
 	#endif
 
 	if (region == GLOBAL_REGION && current_region != GLOBAL_REGION)
-	{
-		ereport(ERROR, errmsg("[remotexact] attempting to write to a read-only region."));
+	{	
+		remotexact_log(ERROR, "attempting to write to a read-only region");
 		return;
 	}
 
@@ -333,7 +334,7 @@ rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple)
 
 	if (region == GLOBAL_REGION && current_region != GLOBAL_REGION)
 	{
-		ereport(ERROR, errmsg("[remotexact] attempting to update to a read-only region."));
+		remotexact_log(ERROR, "attempting to update to a read-only region");
 		return;
 	}
 
@@ -345,7 +346,7 @@ rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple)
 	{
 		ereport(WARNING,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("target relation \"%s\" has neither REPLICA IDENTITY "
+				 errmsg("[remotexact] target relation \"%s\" has neither REPLICA IDENTITY "
 						"index nor REPLICA IDENTITY FULL",
 						RelationGetRelationName(relation))));
 		return;
@@ -393,7 +394,7 @@ rx_collect_delete(Relation relation, HeapTuple oldtuple)
 
 	if (region == GLOBAL_REGION && current_region != GLOBAL_REGION)
 	{
-		ereport(ERROR, errmsg("[remotexact] attempting to delete from a read-only region."));
+		remotexact_log(ERROR, "attempting to delete from a read-only region");
 		return;
 	}
 
@@ -405,7 +406,7 @@ rx_collect_delete(Relation relation, HeapTuple oldtuple)
 	{
 		ereport(WARNING,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("target relation \"%s\" has neither REPLICA IDENTITY "
+				 errmsg("[remotexact] target relation \"%s\" has neither REPLICA IDENTITY "
 						"index nor REPLICA IDENTITY FULL",
 						RelationGetRelationName(relation))));
 		return;
@@ -525,7 +526,7 @@ rx_execute_remote_xact(void)
 		char *msg = pchomp(PQerrorMessage(xactserver_conn));
 
 		xactserver_disconnect();
-		ereport(ERROR, errmsg("[remotexact] failed to send read/write set: %s", msg));
+		remotexact_log(ERROR, "failed to send read/write set: %s", msg);
 	}
 
 	/* Read the response */
@@ -545,11 +546,11 @@ rx_execute_remote_xact(void)
 			PQfreemem(resp_buf.data);
 		}
 		else if (rc == -1)
-			ereport(ERROR, errmsg("[remotexact] connection closed by xactserver"));
+			remotexact_log(ERROR, "connection closed by xactserver");
 		else if (rc == -2)
-			ereport(ERROR, errmsg("[remotexact] could not read COPY data: %s", PQerrorMessage(xactserver_conn)));
+			remotexact_log(ERROR, "could not read COPY data: %s", PQerrorMessage(xactserver_conn));
 		else
-			ereport(ERROR, errmsg("[remotexact] unexpected PGgetCopyData return value: %d", rc));
+			remotexact_log(ERROR, "unexpected PGgetCopyData return value: %d", rc);
 	}
 	PG_CATCH();
 	{
@@ -711,7 +712,7 @@ xactserver_connect(void)
 	{
 		PQfinish(xactserver_conn);
 		xactserver_conn = NULL;
-		ereport(ERROR, errmsg("[remotexact] could not send start command to xactserver"));
+		remotexact_log(ERROR, "could not send start command to xactserver");
 	}
 
 	xactserver_conn_wes = CreateWaitEventSet(TopMemoryContext, 3);
@@ -743,13 +744,12 @@ xactserver_connect(void)
 				FreeWaitEventSet(xactserver_conn_wes);
 				xactserver_conn_wes = NULL;
 
-				ereport(ERROR, errmsg("[remotexact] could not complete handshake with pageserver: %s",
-									  msg));
+				remotexact_log(ERROR, "could not complete handshake with pageserver: %s", msg);
 			}
 		}
 	}
 
-	ereport(LOG, errmsg("[remotexact] connected to '%s'", remotexact_connstring));
+	remotexact_log(LOG, "connected to '%s'", remotexact_connstring);
 
 	xactserver_connected = true;
 }
@@ -766,7 +766,7 @@ xactserver_disconnect(void)
 	 */
 	if (xactserver_connected)
 	{
-		ereport(LOG, errmsg("[remotexact] dropping connection to page server due to error"));
+		remotexact_log(LOG, "dropping connection to page server due to error");
 		PQfinish(xactserver_conn);
 		xactserver_conn = NULL;
 		xactserver_connected = false;
@@ -836,6 +836,6 @@ _PG_init(void)
 		SetRemoteXactHook(&remote_xact_hook);
 		RegisterXactCallback(clean_up_xact_callback, NULL);
 
-		ereport(LOG, errmsg("[remotexact] xactserver connection string \"%s\"", remotexact_connstring));
+		remotexact_log(LOG, "xactserver connection string \"%s\"", remotexact_connstring);
 	}
 }
