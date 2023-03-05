@@ -18,6 +18,7 @@
 #include "executor/executor.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqformat.h"
+#include "log.h"
 #include "optimizer/optimizer.h"
 #include "replication/logicalproto.h"
 #include "rewrite/rewriteHandler.h"
@@ -66,6 +67,7 @@ static void slot_store_data(TupleTableSlot *slot, Relation rel,
 				            LogicalRepTupleData *tupleData);
 static void slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 							 Relation rel, LogicalRepTupleData *tupleData);
+static char *build_tuple_description(TupleTableSlot *slot);
 
 void
 apply_writes(RWSet *rwset)
@@ -83,10 +85,10 @@ apply_writes(RWSet *rwset)
 
 		region = pq_getmsgbyte(&s);
 
-		// We ignore tuples that do not belong to the current region
-		// by setting the skip argument to true to the apply functions
-		// below. They will still decode the tuples but will not apply
-		// the changes for them.
+		/* We ignore tuples that do not belong to the current region
+		   by setting the skip argument to true to the apply functions
+		   below. They will still decode the tuples but will not apply
+		   the changes for them. */
 		skip = region != current_region;
 
 		action = pq_getmsgbyte(&s);
@@ -148,6 +150,12 @@ apply_handle_insert(StringInfo s, bool skip)
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 	slot_store_data(remoteslot, rel, &newtup);
 	MemoryContextSwitchTo(oldctx);
+
+	if (message_level_is_interesting(DEBUG1))
+	{
+		char *tup = build_tuple_description(remoteslot);
+		remotexact_log(DEBUG1, "%s: inserting tuple: %s", RelationGetRelationName(rel), tup);
+	}
 
 	/* Unlike logical replication, we never write to a partitioned relation
 	   (but the written relation can be a partition of a partitioned relation),
@@ -243,6 +251,12 @@ apply_handle_update(StringInfo s, bool skip)
 	slot_store_data(remoteslot, rel,
 					has_oldtup ? &oldtup : &newtup);
 	MemoryContextSwitchTo(oldctx);
+
+	if (message_level_is_interesting(DEBUG1))
+	{
+		char *tup = build_tuple_description(remoteslot);
+		remotexact_log(DEBUG1, "%s: updating tuple: %s", RelationGetRelationName(rel), tup);
+	}
 
 	/* Unlike logical replication, we never write to a partitioned relation
 	   (but the written relation can be a partition of a partitioned relation),
@@ -354,6 +368,12 @@ apply_handle_delete(StringInfo s, bool skip)
 	/* Unlike logical replication, we never write to a partitioned relation
 	   (but the written relation can be a partition of a partitioned relation),
 	   so we don't need to check whether the relation is partitioned or not. */
+
+	if (message_level_is_interesting(DEBUG1))
+	{
+		char *tup = build_tuple_description(remoteslot);
+		remotexact_log(DEBUG1, "%s: deleting tuple: %s", RelationGetRelationName(rel), tup);
+	}
 
 	apply_handle_delete_internal(edata, edata->targetRelInfo, remoteslot);
 
@@ -786,4 +806,39 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 
 	/* And finally, declare that "slot" contains a valid virtual tuple */
 	ExecStoreVirtualTuple(slot);
+}
+
+static char *
+build_tuple_description(TupleTableSlot *slot)
+{
+	int			natts = slot->tts_tupleDescriptor->natts;
+	int			i;
+	StringInfoData buf;
+
+	initStringInfo(&buf);
+	appendStringInfoString(&buf, "(");
+	for (i = 0; i < natts; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(slot->tts_tupleDescriptor, i);
+
+		if (!att->attisdropped)
+		{
+			Oid			foutoid;
+			bool		typisvarlena;
+			char 		*val = "null";
+
+			if (!slot->tts_isnull[i])
+			{
+				getTypeOutputInfo(att->atttypid, &foutoid, &typisvarlena);
+				val = OidOutputFunctionCall(foutoid, slot->tts_values[i]);
+			}
+
+			if (i > 0)
+				appendStringInfoString(&buf, ", ");
+			appendStringInfoString(&buf, val);
+		}
+	}
+	appendStringInfoString(&buf, ")");
+
+	return buf.data;
 }
