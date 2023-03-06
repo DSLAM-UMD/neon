@@ -46,6 +46,7 @@ COPY --chown=nonroot . .
 # Has to be the part of the same RUN since cachepot daemon is killed in the end of this RUN, losing the compilation stats.
 RUN set -e \
     && mold -run cargo build  \
+      --bin neon_local  \
       --bin pg_sni_router  \
       --bin pageserver  \
       --bin pagectl  \
@@ -56,10 +57,11 @@ RUN set -e \
     && cachepot -s
 
 # Build final image
-#
 FROM debian:bullseye-slim
 WORKDIR /data
 
+# Install and update packages.
+USER root
 RUN set -e \
     && apt update \
     && apt install -y \
@@ -68,11 +70,15 @@ RUN set -e \
         openssl \
         ca-certificates \
         curl \
+        jq \
+        netcat \
+        valgrind \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
     && useradd -d /data neon \
     && chown -R neon:neon /data
 
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/pg_sni_router       /usr/local/bin
+COPY --from=build --chown=neon:neon /home/nonroot/target/release/neon_local          /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/pageserver          /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/pagectl             /usr/local/bin
 COPY --from=build --chown=neon:neon /home/nonroot/target/release/safekeeper          /usr/local/bin
