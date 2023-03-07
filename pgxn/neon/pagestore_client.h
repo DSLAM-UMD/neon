@@ -250,10 +250,11 @@ extern void neon_immedsync(SMgrRelation reln, ForkNumber forknum);
 
 /* utils for neon relsize cache */
 extern void relsize_hash_init(void);
-extern bool get_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber *size);
-extern void set_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size);
-extern void update_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size);
+extern bool get_cached_relsize(int region, RelFileNode rnode, ForkNumber forknum, BlockNumber *size);
+extern void set_cached_relsize(int region, RelFileNode rnode, ForkNumber forknum, BlockNumber size);
+extern void update_cached_relsize(int region, RelFileNode rnode, ForkNumber forknum, BlockNumber size);
 extern void forget_cached_relsize(RelFileNode rnode, ForkNumber forknum);
+extern void clear_local_relsize_hash(void); /* Remotexact */
 
 /* functions for local file cache */
 extern void lfc_write(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno, char *buffer);

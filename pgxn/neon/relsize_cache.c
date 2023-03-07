@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include "access/remotexact.h"
 #include "pagestore_client.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
@@ -49,6 +50,9 @@ static shmem_request_hook_type prev_shmem_request_hook = NULL;
 static void relsize_shmem_request(void);
 #endif
 
+/* Remotexact */
+static HTAB *local_relsize_hash = NULL;
+
 /*
  * Size of a cache entry is 20 bytes. So this default will take about 1.2 MB,
  * which seems reasonable.
@@ -74,10 +78,52 @@ neon_smgr_shmem_startup(void)
 	LWLockRelease(AddinShmemInitLock);
 }
 
+/* Remotexact */
+static void
+init_local_relsize_hash(void)
+{
+	HASHCTL hash_ctl;
+
+	Assert(local_relsize_hash == NULL);
+
+	hash_ctl.hcxt = TopTransactionContext;
+	hash_ctl.keysize = sizeof(RelTag);
+	hash_ctl.entrysize = sizeof(RelSizeEntry);
+	/* Use DEFAULT_RELSIZE_HASH_SIZE instead of relsize_hash_size because
+	   relsize_hash_size may be set to 0 but we always need to use this
+	   local relsize cache */
+	local_relsize_hash = hash_create("collected relations",
+									 DEFAULT_RELSIZE_HASH_SIZE,
+									 &hash_ctl,
+									 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+}
+
 bool
-get_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber *size)
+get_cached_relsize(int region, RelFileNode rnode, ForkNumber forknum, BlockNumber *size)
 {
 	bool		found = false;
+
+	/*
+	 * Remotexact
+	 * Use process-local relsize cache for remote relations
+	 */
+	if (RegionIsRemote(region))
+	{
+		if (local_relsize_hash != NULL)
+		{
+			RelTag		tag;
+			RelSizeEntry *entry;
+			tag.rnode = rnode;
+			tag.forknum = forknum;
+			entry = hash_search(local_relsize_hash, &tag, HASH_FIND, NULL);
+			if (entry != NULL)
+			{
+				*size = entry->size;
+				return true;
+			}
+		}
+		return false;
+	}
 
 	if (relsize_hash_size > 0)
 	{
@@ -99,8 +145,27 @@ get_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber *size)
 }
 
 void
-set_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size)
+set_cached_relsize(int region, RelFileNode rnode, ForkNumber forknum, BlockNumber size)
 {
+	/*
+	 * Remotexact
+	 * Use process-local relsize cache for remote relations
+	 */
+	if (RegionIsRemote(region))
+	{
+		RelTag		tag;
+		RelSizeEntry *entry;
+
+		if (local_relsize_hash == NULL)
+			init_local_relsize_hash();
+			
+		tag.rnode = rnode;
+		tag.forknum = forknum;
+		entry = hash_search(local_relsize_hash, &tag, HASH_ENTER, NULL);
+		entry->size = size;
+		return;
+	}
+
 	if (relsize_hash_size > 0)
 	{
 		RelTag		tag;
@@ -116,8 +181,29 @@ set_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size)
 }
 
 void
-update_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size)
+update_cached_relsize(int region, RelFileNode rnode, ForkNumber forknum, BlockNumber size)
 {
+	/*	
+	 * Remotexact
+	 * Use process-local relsize cache for remote relations
+	 */
+	if (RegionIsRemote(region))
+	{
+		RelTag		tag;
+		RelSizeEntry *entry;
+		bool		found;
+
+		if (local_relsize_hash == NULL)
+			init_local_relsize_hash();
+			
+		tag.rnode = rnode;
+		tag.forknum = forknum;
+		entry = hash_search(local_relsize_hash, &tag, HASH_ENTER, &found);
+		if (!found || entry->size < size)
+			entry->size = size;
+		return;
+	}
+
 	if (relsize_hash_size > 0)
 	{
 		RelTag		tag;
@@ -193,3 +279,9 @@ relsize_shmem_request(void)
 	RequestNamedLWLockTranche("neon_relsize", 1);
 }
 #endif
+
+void
+clear_local_relsize_hash(void)
+{
+	local_relsize_hash = NULL;
+}

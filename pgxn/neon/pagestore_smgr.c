@@ -1628,7 +1628,7 @@ neon_exists(SMgrRelation reln, ForkNumber forkNum)
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	if (get_cached_relsize(reln->smgr_rnode.node, forkNum, &n_blocks))
+	if (get_cached_relsize(reln->smgr_region, reln->smgr_rnode.node, forkNum, &n_blocks))
 	{
 		return true;
 	}
@@ -1746,12 +1746,12 @@ neon_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 	 */
 	if (isRedo)
 	{
-		update_cached_relsize(reln->smgr_rnode.node, forkNum, 0);
-		get_cached_relsize(reln->smgr_rnode.node, forkNum,
+		update_cached_relsize(reln->smgr_region, reln->smgr_rnode.node, forkNum, 0);
+		get_cached_relsize(reln->smgr_region, reln->smgr_rnode.node, forkNum,
 						   &reln->smgr_cached_nblocks[forkNum]);
 	}
 	else
-		set_cached_relsize(reln->smgr_rnode.node, forkNum, 0);
+		set_cached_relsize(reln->smgr_region, reln->smgr_rnode.node, forkNum, 0);
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
@@ -1860,7 +1860,7 @@ neon_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		neon_wallog_page(reln, forkNum, n_blocks++, buffer, true);
 
 	neon_wallog_page(reln, forkNum, blkno, buffer, false);
-	set_cached_relsize(reln->smgr_rnode.node, forkNum, blkno + 1);
+	set_cached_relsize(reln->smgr_region, reln->smgr_rnode.node, forkNum, blkno + 1);
 
 	lsn = PageGetLSN(buffer);
 	elog(SmgrTrace, "smgrextend called for %u/%u/%u.%u blk %u, page LSN: %X/%08X",
@@ -2398,7 +2398,7 @@ neon_nblocks(SMgrRelation reln, ForkNumber forknum)
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	if (get_cached_relsize(reln->smgr_rnode.node, forknum, &n_blocks))
+	if (get_cached_relsize(reln->smgr_region, reln->smgr_rnode.node, forknum, &n_blocks))
 	{
 		elog(SmgrTrace, "cached nblocks for %u/%u/%u.%u: %u blocks",
 			 reln->smgr_rnode.node.spcNode,
@@ -2450,12 +2450,7 @@ neon_nblocks(SMgrRelation reln, ForkNumber forknum)
 			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
 	}
 
-	/*
-	 * Remotexact
-	 * Do not cache relsize of remote relation because it can be changed by another region
-	 */
-	if (!RegionIsRemote(reln->smgr_region))
-		update_cached_relsize(reln->smgr_rnode.node, forknum, n_blocks);
+	update_cached_relsize(reln->smgr_region, reln->smgr_rnode.node, forknum, n_blocks);
 
 	elog(SmgrTrace, "neon_nblocks: rel %u/%u/%u fork %u region %d (request LSN %X/%08X): %u blocks",
 		 reln->smgr_rnode.node.spcNode,
@@ -2549,7 +2544,7 @@ neon_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	set_cached_relsize(reln->smgr_rnode.node, forknum, nblocks);
+	set_cached_relsize(reln->smgr_region, reln->smgr_rnode.node, forknum, nblocks);
 
 	/*
 	 * Truncating a relation drops all its buffers from the buffer cache
@@ -2777,12 +2772,16 @@ AtEOXact_neon(XactEvent event, void *arg)
 			 */
 			unlogged_build_rel = NULL;
 			unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
+			/* Remotexact */
 			clear_region_lsns();
+			clear_local_relsize_hash();
 			break;
 
 		case XACT_EVENT_COMMIT:
 		case XACT_EVENT_PARALLEL_COMMIT:
+			/* Remotexact */
 			clear_region_lsns();
+			clear_local_relsize_hash();
 			/* fall through */
 		case XACT_EVENT_PREPARE:
 		case XACT_EVENT_PRE_COMMIT:
@@ -2939,11 +2938,11 @@ neon_redo_read_buffer_filter(XLogReaderState *record, uint8 block_id)
 	LWLockRelease(partitionLock);
 
 	/* Extend the relation if we know its size */
-	if (get_cached_relsize(rnode, forknum, &relsize))
+	if (get_cached_relsize(current_region, rnode, forknum, &relsize))
 	{
 		if (relsize < blkno + 1)
 		{
-			update_cached_relsize(rnode, forknum, blkno + 1);
+			update_cached_relsize(current_region, rnode, forknum, blkno + 1);
 			SetLastWrittenLSNForRelation(end_recptr, rnode, forknum);
 		}
 	}
@@ -2976,7 +2975,7 @@ neon_redo_read_buffer_filter(XLogReaderState *record, uint8 block_id)
 
 		Assert(nbresponse->n_blocks > blkno);
 
-		set_cached_relsize(rnode, forknum, nbresponse->n_blocks);
+		set_cached_relsize(current_region, rnode, forknum, nbresponse->n_blocks);
 		SetLastWrittenLSNForRelation(end_recptr, rnode, forknum);
 
 		elog(SmgrTrace, "Set length to %d", nbresponse->n_blocks);
