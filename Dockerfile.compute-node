@@ -417,6 +417,7 @@ RUN apt update &&  \
         libsfcgal1 \
         libxml2 \
         libxslt1.1 \
+        curl \
         jq \
         netcat \
         valgrind \
