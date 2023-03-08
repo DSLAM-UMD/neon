@@ -98,11 +98,6 @@ elif [ "$mode" = "swarm" ]; then
                         $minio_image                         \
                         server /data --address :9000 --console-address :9001
 
-  if [ -z $(docker service ls -q -f name="registry") ]; then
-    echo "Starting the local image registry"
-    docker service create --name registry --publish published=5000,target=5000 registry:2
-  fi
-
 else
   echo "Invalid mode \"$mode\". Something is wrong with the script."
   exit 1

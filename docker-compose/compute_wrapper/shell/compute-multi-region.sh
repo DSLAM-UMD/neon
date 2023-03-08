@@ -43,7 +43,7 @@ cat ${SPEC_FILE}
 
 echo "Start compute node"
 /usr/local/bin/compute_ctl --pgdata /var/db/postgres/compute                    \
-     -C "postgresql://cloud_admin@localhost:55433/postgres"                     \
+     -C "postgresql://cloud_admin@localhost:55432/postgres"                     \
      -b /usr/local/bin/postgres                                                 \
      -S ${SPEC_FILE}
      # --valgrind "valgrind --leak-check=no                                       \
