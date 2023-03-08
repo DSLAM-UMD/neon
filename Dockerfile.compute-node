@@ -596,6 +596,7 @@ RUN apt update &&  \
         libxml2 \
         libxslt1.1 \
         libzstd1 \
+        curl \
         jq \
         netcat \
         valgrind \
