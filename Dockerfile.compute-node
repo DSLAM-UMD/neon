@@ -844,6 +844,7 @@ RUN apt update &&  \
         libzstd1 \
         libcurl4-openssl-dev \
         locales \
+        curl \
         jq \
         netcat \
         valgrind \
