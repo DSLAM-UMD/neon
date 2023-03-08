@@ -844,6 +844,9 @@ RUN apt update &&  \
         libzstd1 \
         libcurl4-openssl-dev \
         locales \
+        jq \
+        netcat \
+        valgrind \
         procps \
         zlib1g \
         ca-certificates && \
