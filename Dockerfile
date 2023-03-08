@@ -93,7 +93,7 @@ COPY --from=pg-build /home/nonroot/postgres_install.tar.gz /data/
 
 # By default, pageserver uses `.neon/` working directory in WORKDIR, so create one and fill it with the dummy config.
 # Now, when `docker run ... pageserver` is run, it can start without errors, yet will have some default dummy values.
-RUN mkdir -p /data/.neon/ && chown -R neon:neon /data/.neon/ \
+RUN mkdir -p /data/.neon/ && chown -R neon:neon /data/ \
     && /usr/local/bin/pageserver -D /data/.neon/ --init \
        -c "id=1234" \
        -c "broker_endpoint='http://storage_broker:50051'" \
