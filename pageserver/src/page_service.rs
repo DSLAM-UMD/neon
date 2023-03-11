@@ -1349,32 +1349,3 @@ fn get_timeline_by_region_id(
         .map(Arc::to_owned)
         .ok_or_else(|| anyhow::anyhow!("region {} does not exists", region_id))
 }
-
-///
-/// A std::io::Write implementation that wraps all data written to it in CopyData
-/// messages.
-///
-struct CopyDataSink<'a> {
-    pgb: &'a mut PostgresBackend,
-    rt: tokio::runtime::Handle,
-}
-
-impl<'a> io::Write for CopyDataSink<'a> {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        // CopyData
-        // FIXME: if the input is large, we should split it into multiple messages.
-        // Not sure what the threshold should be, but the ultimate hard limit is that
-        // the length cannot exceed u32.
-        // FIXME: flush isn't really required, but makes it easier
-        // to view in wireshark
-        self.pgb.write_message(&BeMessage::CopyData(data))?;
-        self.rt.block_on(self.pgb.flush())?;
-        trace!("CopyData sent for {} bytes!", data.len());
-
-        Ok(data.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        // no-op
-        Ok(())
-    }
-}
