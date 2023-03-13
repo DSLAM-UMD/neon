@@ -105,8 +105,8 @@ services:
       - BROKER_ENDPOINT='http://storage_broker:50051'
       - LISTEN_PG_ADDR=6400
       - LISTEN_HTTP_ADDR=9898
-      #- RUST_BACKTRACE=1
-      #- RUST_LOG=debug
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      - RUST_LOG=${RUST_LOG:-info}
     ports:
        #- 6400:6400  # pg protocol handler
        - 9898:9898 # http endpoints
@@ -140,8 +140,8 @@ services:
       - SAFEKEEPER_ADVERTISE_URL=safekeeper-r1-1:5454
       - SAFEKEEPER_ID=1
       - BROKER_ENDPOINT=http://storage_broker:50051
-      #- RUST_BACKTRACE=1
-      #- RUST_LOG=debug
+      # - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      # - RUST_LOG=${RUST_LOG:-info}
     extra_hosts:
       # While other services can connect to a safekeeper using its name, the safekeeper
       # itself cannot resolve its own name (?!), hence cannot bind to the listen-pg 
@@ -180,8 +180,8 @@ services:
   #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r1-2:5454
   #     - SAFEKEEPER_ID=2
   #     - BROKER_ENDPOINT=http://storage_broker:50051
-  #     #- RUST_BACKTRACE=1
-  #     #- RUST_LOG=debug
+  #     #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+  #     #- RUST_LOG=${RUST_LOG:-info}
   #   extra_hosts:
   #     - safekeeper-r1-2:0.0.0.0
   #   ports: []
@@ -197,8 +197,8 @@ services:
   #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r1-3:5454
   #     - SAFEKEEPER_ID=3
   #     - BROKER_ENDPOINT=http://storage_broker:50051
-  #     #- RUST_BACKTRACE=1
-  #     #- RUST_LOG=debug
+  #     #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+  #     #- RUST_LOG=${RUST_LOG:-info}
   #   extra_hosts:
   #     - safekeeper-r1-3:0.0.0.0
   #   ports: []
@@ -211,11 +211,11 @@ services:
   xactserver-r1: &xactserver
     image: ctring/xactserver:${TAG:-latest}
     environment:
-      - NODE_ID=1
-      - CONNECT_PG=postgresql://cloud_admin@compute-r1:55433/postgres
-      - NODES=dummy,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
-      # - RUST_LOG=debug
-      # - RUST_BACKTRACE=1
+      - NODE_ID=0
+      - CONNECT_PG=postgresql://cloud_admin@compute-r0:55432/postgres
+      - NODES=http://xactserver-r0:23000,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
     extra_hosts:
       - xactserver-r1:0.0.0.0
     entrypoint:
@@ -268,6 +268,117 @@ services:
     entrypoint:
       - "/shell/compute-multi-region.sh"
     depends_on:
+      - safekeeper-r0-1
+      # - safekeeper-r0-2
+      # - safekeeper-r0-3
+      - pageserver-r0
+      - xactserver-r0
+    deploy:
+      placement:
+        constraints:
+          - node.labels.has_compute==true
+          - node.labels.region==0
+
+  #############################################
+  #                 REGION 1                  #
+  #############################################
+  pageserver-r1:
+    <<: *pageserver
+    environment:
+      - BROKER_ENDPOINT='http://storage_broker:50051'
+      - LISTEN_PG_ADDR=6400
+      - LISTEN_HTTP_ADDR=9898
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      - RUST_LOG=${RUST_LOG:-info}
+    ports:
+       #- 6400:6400  # pg protocol handler
+       - 9899:9898 # http endpoints
+    deploy:
+      placement:
+        constraints:
+          - node.labels.has_pageserver==true
+          - node.labels.region==1
+
+  safekeeper-r1-1:
+    <<: *safekeeper
+    environment:
+      - SAFEKEEPER_ADVERTISE_URL=safekeeper-r1-1:5454
+      - SAFEKEEPER_ID=1
+      - BROKER_ENDPOINT=http://storage_broker:50051
+      #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      #- RUST_LOG=${RUST_LOG:-info}
+    extra_hosts:
+      - safekeeper-r1-1:0.0.0.0
+    ports: []
+    deploy:
+      placement:
+        constraints:
+          - node.labels.has_safekeeper1==true
+          - node.labels.region==1
+
+  # safekeeper-r1-2:
+  #   <<: *safekeeper
+  #   environment:
+  #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r1-2:5454
+  #     - SAFEKEEPER_ID=2
+  #     - BROKER_ENDPOINT=http://storage_broker:50051
+  #     #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+  #     #- RUST_LOG=${RUST_LOG:-info}
+  #   extra_hosts:
+  #     - safekeeper-r1-2:0.0.0.0
+  #   ports: []
+  #   deploy:
+  #     placement:
+  #       constraints:
+  #         - node.labels.has_safekeeper2==true
+  #         - node.labels.region==1
+
+  # safekeeper-r1-3:
+  #   <<: *safekeeper
+  #   environment:
+  #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r1-3:5454
+  #     - SAFEKEEPER_ID=3
+  #     - BROKER_ENDPOINT=http://storage_broker:50051
+  #     #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+  #     #- RUST_LOG=${RUST_LOG:-info}
+  #   extra_hosts:
+  #     - safekeeper-r1-3:0.0.0.0
+  #   ports: []
+  #   deploy:
+  #     placement:
+  #       constraints:
+  #         - node.labels.has_safekeeper3==true
+  #         - node.labels.region==1
+
+  xactserver-r1:
+    <<: *xactserver
+    environment:
+      - NODE_ID=1
+      - CONNECT_PG=postgresql://cloud_admin@compute-r1:55432/postgres
+      - NODES=http://xactserver-r0:23000,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+    extra_hosts:
+      - xactserver-r1:0.0.0.0
+    deploy:
+      placement:
+        constraints:
+          - node.labels.has_xactserver==true
+          - node.labels.region==1
+
+  compute-r1:
+    <<: *compute
+    environment:
+      - PG_VERSION=${PG_VERSION:-14}
+      - PAGESERVER_HOST=pageserver-r1
+      - SAFEKEEPERS_ADDR=safekeeper-r1-1:5454
+      # - SAFEKEEPERS_ADDR=safekeeper-r1-1:5454,safekeeper-r1-2:5454,safekeeper-r1-3:5454
+      - REGION=1
+      - XACTSERVER=xactserver-r1:10000
+    ports:
+      - 55433:55432 # pg protocol handler
+      - 3081:3080 # http endpoints
+    depends_on:
       - safekeeper-r1-1
       # - safekeeper-r1-2
       # - safekeeper-r1-3
@@ -288,8 +399,8 @@ services:
       - BROKER_ENDPOINT='http://storage_broker:50051'
       - LISTEN_PG_ADDR=6400
       - LISTEN_HTTP_ADDR=9898
-      #- RUST_BACKTRACE=1
-      #- RUST_LOG=debug
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      - RUST_LOG=${RUST_LOG:-info}
     ports:
        #- 6400:6400  # pg protocol handler
        - 9899:9898 # http endpoints
@@ -305,8 +416,8 @@ services:
       - SAFEKEEPER_ADVERTISE_URL=safekeeper-r2-1:5454
       - SAFEKEEPER_ID=1
       - BROKER_ENDPOINT=http://storage_broker:50051
-      #- RUST_BACKTRACE=1
-      #- RUST_LOG=debug
+      #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      #- RUST_LOG=${RUST_LOG:-info}
     extra_hosts:
       - safekeeper-r2-1:0.0.0.0
     ports: []
@@ -322,8 +433,8 @@ services:
   #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r2-2:5454
   #     - SAFEKEEPER_ID=2
   #     - BROKER_ENDPOINT=http://storage_broker:50051
-  #     #- RUST_BACKTRACE=1
-  #     #- RUST_LOG=debug
+  #     #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+  #     #- RUST_LOG=${RUST_LOG:-info}
   #   extra_hosts:
   #     - safekeeper-r2-2:0.0.0.0
   #   ports: []
@@ -339,8 +450,8 @@ services:
   #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r2-3:5454
   #     - SAFEKEEPER_ID=3
   #     - BROKER_ENDPOINT=http://storage_broker:50051
-  #     #- RUST_BACKTRACE=1
-  #     #- RUST_LOG=debug
+  #     #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+  #     #- RUST_LOG=${RUST_LOG:-info}
   #   extra_hosts:
   #     - safekeeper-r2-3:0.0.0.0
   #   ports: []
@@ -354,10 +465,10 @@ services:
     <<: *xactserver
     environment:
       - NODE_ID=2
-      - CONNECT_PG=postgresql://cloud_admin@compute-r2:55433/postgres
-      - NODES=dummy,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
-      # - RUST_LOG=debug
-      # - RUST_BACKTRACE=1
+      - CONNECT_PG=postgresql://cloud_admin@compute-r2:55432/postgres
+      - NODES=http://xactserver-r0:23000,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
     extra_hosts:
       - xactserver-r2:0.0.0.0
     deploy:
@@ -400,8 +511,8 @@ services:
       - BROKER_ENDPOINT='http://storage_broker:50051'
       - LISTEN_PG_ADDR=6400
       - LISTEN_HTTP_ADDR=9898
-      #- RUST_BACKTRACE=1
-      #- RUST_LOG=debug
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      - RUST_LOG=${RUST_LOG:-info}
     ports:
        #- 6400:6400  # pg protocol handler
        - 9900:9898 # http endpoints
@@ -417,8 +528,8 @@ services:
       - SAFEKEEPER_ADVERTISE_URL=safekeeper-r3-1:5454
       - SAFEKEEPER_ID=1
       - BROKER_ENDPOINT=http://storage_broker:50051
-      #- RUST_BACKTRACE=1
-      #- RUST_LOG=debug
+      # - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      # - RUST_LOG=${RUST_LOG:-info}
     extra_hosts:
       - safekeeper-r3-1:0.0.0.0
     ports: []
@@ -434,8 +545,8 @@ services:
   #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r3-2:5454
   #     - SAFEKEEPER_ID=2
   #     - BROKER_ENDPOINT=http://storage_broker:50051
-  #     #- RUST_BACKTRACE=1
-  #     #- RUST_LOG=debug
+  #     #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+  #     #- RUST_LOG=${RUST_LOG:-info}
   #   extra_hosts:
   #     - safekeeper-r3-2:0.0.0.0
   #   ports: []
@@ -451,8 +562,8 @@ services:
   #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r3-3:5454
   #     - SAFEKEEPER_ID=3
   #     - BROKER_ENDPOINT=http://storage_broker:50051
-  #     #- RUST_BACKTRACE=1
-  #     #- RUST_LOG=debug
+  #     #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+  #     #- RUST_LOG=${RUST_LOG:-info}
   #   extra_hosts:
   #     - safekeeper-r3-3:0.0.0.0
   #   ports: []
@@ -466,10 +577,10 @@ services:
     <<: *xactserver
     environment:
       - NODE_ID=3
-      - CONNECT_PG=postgresql://cloud_admin@compute-r3:55433/postgres
-      - NODES=dummy,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
-      # - RUST_LOG=debug
-      # - RUST_BACKTRACE=1
+      - CONNECT_PG=postgresql://cloud_admin@compute-r3:55432/postgres
+      - NODES=http://xactserver-r0:23000,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
     extra_hosts:
       - xactserver-r3:0.0.0.0
     deploy:
