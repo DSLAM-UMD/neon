@@ -1,23 +1,43 @@
 {
-  "ip-111-111-111-111": [
+  "ip-172-31-38-247": [
+    "region=0",
+    "has_pageserver=true",
+    "has_safekeeper1=true",
+    "has_compute=true",
+    "has_xactserver=true",
+    "has_benchbase=true"
+  ],
+  "ip-172-31-40-83": [
     "region=1",
     "has_pageserver=true",
     "has_safekeeper1=true",
     "has_compute=true",
     "has_xactserver=true"
   ],
-  "ip-222-222-222-222": [
+  "ip-172-31-35-210": [
     "region=2",
     "has_pageserver=true",
     "has_safekeeper1=true",
     "has_compute=true",
     "has_xactserver=true"
   ],
-  "ip-333-333-333-333": [
+  "ip-172-31-34-117": [
     "region=3",
     "has_pageserver=true",
     "has_safekeeper1=true",
     "has_compute=true",
     "has_xactserver=true"
+  ],
+  "ip-172-31-23-38": [
+    "region=1",
+    "has_benchbase=true"
+  ],
+  "ip-172-31-27-91": [
+    "region=2",
+    "has_benchbase=true"
+  ],
+  "ip-172-31-28-81": [
+    "region=3",
+    "has_benchbase=true"
   ]
 }

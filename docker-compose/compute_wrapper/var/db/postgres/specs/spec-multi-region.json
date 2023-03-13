@@ -45,12 +45,12 @@
             },
             {
                 "name": "shared_buffers",
-                "value": "128MB",
+                "value": "8GB",
                 "vartype": "string"
             },
             {
                 "name": "max_connections",
-                "value": "100",
+                "value": "1000",
                 "vartype": "integer"
             },
             {
@@ -140,7 +140,7 @@
             },
             {
                 "name": "max_prepared_transactions",
-                "value": "64",
+                "value": "128",
                 "vartype": "integer"
             },
             {
