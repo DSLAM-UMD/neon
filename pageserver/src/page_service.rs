@@ -545,7 +545,7 @@ impl PageServerHandler {
                 }
                 PagestreamFeMessage::DbSize(req) => {
                     let _timer = metrics.get_db_size.start_timer();
-                    match get_timeline_by_region_id(&timelines, RegionId::default()) {
+                    match get_timeline_by_region_id(&timelines, req.region) {
                         Ok(timeline) => self.handle_db_size_request(&timeline, &req, &ctx).await,
                         Err(e) => Err(e),
                     }

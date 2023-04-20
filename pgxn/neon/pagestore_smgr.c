@@ -933,6 +933,7 @@ nm_pack_request(NeonRequest * msg)
 
 				pq_sendbyte(&s, msg_req->req.latest);
 				pq_sendint64(&s, msg_req->req.lsn);
+				pq_sendint8(&s, msg_req->req.region);
 				pq_sendint32(&s, msg_req->dbNode);
 
 				break;
@@ -1191,6 +1192,7 @@ nm_to_string(NeonMessage * msg)
 
 				appendStringInfoString(&s, "{\"type\": \"NeonDbSizeRequest\"");
 				appendStringInfo(&s, ", \"dbnode\": \"%u\"", msg_req->dbNode);
+				appendStringInfo(&s, ", \"region\": %d", msg_req->req.region);
 				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
 				appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
 				appendStringInfoChar(&s, '}');
@@ -2482,6 +2484,7 @@ neon_dbsize(Oid dbNode)
 		NeonDbSizeRequest request = {
 			.req.tag = T_NeonDbSizeRequest,
 			.req.latest = latest,
+			.req.region = current_region,
 			.req.lsn = request_lsn,
 			.dbNode = dbNode,
 		};
