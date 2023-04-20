@@ -663,19 +663,6 @@ fn handle_endpoint(ep_match: &ArgMatches, env: &local_env::LocalEnv) -> Result<(
                 .copied()
                 .context("Failed to parse postgres version from the argument string")?;
 
-            let region_timeline_ids = sub_args
-                .get_many::<String>("regions")
-                .map(|regions| {
-                    regions
-                        .map(|r| {
-                            env.get_branch_timeline_id(r, tenant_id).ok_or_else(|| {
-                                anyhow!("Found no timeline id for branch name '{}'", r)
-                            })
-                        })
-                        .collect()
-                })
-                .transpose()?;
-
             cplane.new_endpoint(
                 tenant_id,
                 &endpoint_id,

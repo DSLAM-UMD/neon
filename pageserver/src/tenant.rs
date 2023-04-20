@@ -2131,8 +2131,8 @@ impl Tenant {
         src_timeline: &Arc<Timeline>,
         dst_id: TimelineId,
         start_lsn: Option<Lsn>,
-        ctx: &RequestContext,
         region_id: RegionId,
+        ctx: &RequestContext,
     ) -> anyhow::Result<Arc<Timeline>> {
         let src_id = src_timeline.timeline_id;
 

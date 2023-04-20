@@ -76,24 +76,6 @@ impl ComputeControlPlane {
     ) -> Result<Arc<Endpoint>> {
         let port = port.unwrap_or_else(|| self.get_port());
 
-        let multi_region = region_timeline_ids
-            .map(|timeline_ids| -> Result<_> {
-                let current_region = timeline_ids
-                    .iter()
-                    .position(|&id| id == timeline_id)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Found no timeline id '{}' in the list of region timeline ids",
-                            timeline_id
-                        )
-                    })?;
-                Ok(MultiRegion {
-                    timeline_ids,
-                    current_region,
-                })
-            })
-            .transpose()?;
-
         let ep = Arc::new(Endpoint {
             name: name.to_owned(),
             address: SocketAddr::new("127.0.0.1".parse().unwrap(), port),
@@ -116,12 +98,6 @@ impl ComputeControlPlane {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-#[derive(Debug)]
-struct MultiRegion {
-    timeline_ids: Vec<TimelineId>,
-    current_region: usize,
-}
 
 #[derive(Debug)]
 pub struct Endpoint {
@@ -174,7 +150,6 @@ impl Endpoint {
         let timeline_id: TimelineId = conf.parse_field("neon.timeline_id", &context)?;
         let tenant_id: TenantId = conf.parse_field("neon.tenant_id", &context)?;
 
-        let region_timelines = conf.parse_field("neon.region_timelines", &context);
         let current_region = conf
             .parse_field("current_region", &context)
             .unwrap_or_default();
