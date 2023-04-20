@@ -481,6 +481,7 @@ pub struct PagestreamGetPageRequest {
 pub struct PagestreamDbSizeRequest {
     pub latest: bool,
     pub lsn: Lsn,
+    pub region: RegionId,
     pub dbnode: u32,
 }
 
@@ -584,6 +585,7 @@ impl PagestreamFeMessage {
                 bytes.put_u8(3);
                 bytes.put_u8(u8::from(req.latest));
                 bytes.put_u64(req.lsn.0);
+                bytes.put_u8(req.region.0);
                 bytes.put_u32(req.dbnode);
             }
 
@@ -653,6 +655,7 @@ impl PagestreamFeMessage {
             3 => Ok(PagestreamFeMessage::DbSize(PagestreamDbSizeRequest {
                 latest: body.read_u8()? != 0,
                 lsn: Lsn::from(body.read_u64::<BigEndian>()?),
+                region: RegionId(body.read_u8()?),
                 dbnode: body.read_u32::<BigEndian>()?,
             })),
             4 => Ok(PagestreamFeMessage::GetSlruPage(
@@ -781,6 +784,7 @@ mod tests {
                 latest: true,
                 lsn: Lsn(4),
                 dbnode: 7,
+                region: RegionId(0),
             }),
         ];
         for msg in messages {
