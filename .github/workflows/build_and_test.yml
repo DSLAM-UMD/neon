@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - remotexact
+      - remotexact-pin
+      - test
   pull_request:
 
 defaults:
