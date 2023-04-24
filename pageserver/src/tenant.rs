@@ -3288,12 +3288,12 @@ mod tests {
                 .load()
                 .await;
         let tline = tenant
-            .create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, &ctx)?
+            .create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, RegionId(0), &ctx)?
             .initialize(&ctx)?;
         make_some_layers(tline.as_ref(), Lsn(0x20)).await?;
 
         tenant
-            .branch_timeline(&tline, NEW_TIMELINE_ID, Some(Lsn(0x40)), &ctx)
+            .branch_timeline(&tline, NEW_TIMELINE_ID, Some(Lsn(0x40)), RegionId(0), &ctx)
             .await?;
         let newtline = tenant
             .get_timeline(NEW_TIMELINE_ID, true)
