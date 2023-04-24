@@ -90,6 +90,12 @@ services:
       - source: prometheus
         target: /etc/prometheus/prometheus.yml
 
+  grafana:
+    restart: always
+    image: grafana/grafana-oss:latest
+    ports:
+      - 3000:3000
+
   #############################################
   #                 REGION 0                  #
   #############################################
@@ -266,6 +272,19 @@ services:
           - node.labels.has_compute==true
           - node.labels.region==0
 
+  compute-metrics-exporter-r0: &compute-metrics-exporter
+    restart: always
+    image: quay.io/prometheuscommunity/postgres-exporter:master
+    environment:
+      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r0:55432/postgres?sslmode=disable
+    depends_on:
+      - compute-r0
+    deploy:
+      placement:
+        constraints:
+          - node.labels.has_compute==true
+          - node.labels.region==0
+
   #############################################
   #                 REGION 1                  #
   #############################################
@@ -371,6 +390,18 @@ services:
       # - safekeeper-r1-3
       - pageserver-r1
       - xactserver-r1
+    deploy:
+      placement:
+        constraints:
+          - node.labels.has_compute==true
+          - node.labels.region==1
+
+  compute-metrics-exporter-r1:
+    <<: *compute-metrics-exporter
+    environment:
+      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r1:55432/postgres?sslmode=disable
+    depends_on:
+      - compute-r1
     deploy:
       placement:
         constraints:
@@ -488,6 +519,18 @@ services:
           - node.labels.has_compute==true
           - node.labels.region==2
 
+  compute-metrics-exporter-r2:
+    <<: *compute-metrics-exporter
+    environment:
+      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r2:55432/postgres?sslmode=disable
+    depends_on:
+      - compute-r2
+    deploy:
+      placement:
+        constraints:
+          - node.labels.has_compute==true
+          - node.labels.region==2
+
   #############################################
   #                 REGION 3                  #
   #############################################
@@ -593,6 +636,18 @@ services:
       # - safekeeper-r3-3
       - pageserver-r3
       - xactserver-r3
+    deploy:
+      placement:
+        constraints:
+          - node.labels.has_compute==true
+          - node.labels.region==3
+
+  compute-metrics-exporter-r3:
+    <<: *compute-metrics-exporter
+    environment:
+      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r3:55432/postgres?sslmode=disable
+    depends_on:
+      - compute-r3
     deploy:
       placement:
         constraints:
