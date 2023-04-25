@@ -234,7 +234,12 @@ pub static SMGR_QUERY_TIME: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
         "pageserver_smgr_query_seconds",
         "Time spent on smgr query handling",
-        &["smgr_query_type", "tenant_id", "timeline_id"],
+        &[
+            "smgr_query_type",
+            "tenant_id",
+            "timeline_id",
+            "timeline_region"
+        ],
         SMGR_QUERY_TIME_BUCKETS.into()
     )
     .expect("failed to define a metric")

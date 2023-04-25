@@ -238,27 +238,52 @@ struct PageRequestMetrics {
 }
 
 impl PageRequestMetrics {
-    fn new(tenant_id: &TenantId, timeline_id: &TimelineId) -> Self {
+    fn new(tenant_id: &TenantId, timeline_id: &TimelineId, timeline_region: RegionId) -> Self {
         let tenant_id = tenant_id.to_string();
         let timeline_id = timeline_id.to_string();
+        let timeline_region = timeline_region.to_string();
 
-        let get_rel_exists =
-            SMGR_QUERY_TIME.with_label_values(&["get_rel_exists", &tenant_id, &timeline_id]);
+        let get_rel_exists = SMGR_QUERY_TIME.with_label_values(&[
+            "get_rel_exists",
+            &tenant_id,
+            &timeline_id,
+            &timeline_region,
+        ]);
 
-        let get_rel_size =
-            SMGR_QUERY_TIME.with_label_values(&["get_rel_size", &tenant_id, &timeline_id]);
+        let get_rel_size = SMGR_QUERY_TIME.with_label_values(&[
+            "get_rel_size",
+            &tenant_id,
+            &timeline_id,
+            &timeline_region,
+        ]);
 
-        let get_page_at_lsn =
-            SMGR_QUERY_TIME.with_label_values(&["get_page_at_lsn", &tenant_id, &timeline_id]);
+        let get_page_at_lsn = SMGR_QUERY_TIME.with_label_values(&[
+            "get_page_at_lsn",
+            &tenant_id,
+            &timeline_id,
+            &timeline_region,
+        ]);
 
-        let get_db_size =
-            SMGR_QUERY_TIME.with_label_values(&["get_db_size", &tenant_id, &timeline_id]);
+        let get_db_size = SMGR_QUERY_TIME.with_label_values(&[
+            "get_db_size",
+            &tenant_id,
+            &timeline_id,
+            &timeline_region,
+        ]);
 
-        let get_slru_page =
-            SMGR_QUERY_TIME.with_label_values(&["get_slru_page", &tenant_id, &timeline_id]);
+        let get_slru_page = SMGR_QUERY_TIME.with_label_values(&[
+            "get_slru_page",
+            &tenant_id,
+            &timeline_id,
+            &timeline_region,
+        ]);
 
-        let get_latest_lsn =
-            SMGR_QUERY_TIME.with_label_values(&["get_latest_lsn", &tenant_id, &timeline_id]);
+        let get_latest_lsn = SMGR_QUERY_TIME.with_label_values(&[
+            "get_latest_lsn",
+            &tenant_id,
+            &timeline_id,
+            &timeline_region,
+        ]);
 
         Self {
             get_rel_exists,
@@ -331,22 +356,23 @@ impl PageServerHandler {
             get_timelines_indexed_by_region_id(&tenant)?
         };
 
-        // Remotexact
-        let main_timeline = get_timeline_by_region_id(&timelines, RegionId(0)).unwrap();
-
         // switch client to COPYBOTH
         pgb.write_message_noflush(&BeMessage::CopyBothResponse)?;
         pgb.flush().await?;
 
-        let empty_timeline_id = TimelineId::from([0u8; 16]);
-        let metrics = PageRequestMetrics::new(
-            &tenant_id,
-            if let Some(ref id) = timeline_id {
-                id
-            } else {
-                &empty_timeline_id
-            },
-        );
+        let metrics = timelines
+            .iter()
+            .map(|(region_id, timeline)| {
+                (
+                    *region_id,
+                    PageRequestMetrics::new(&tenant_id, &timeline.timeline_id, timeline.region_id),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        // Remotexact
+        let (main_timeline, _) =
+            get_timeline_and_metrics_by_region_id(&timelines, &metrics, RegionId(0)).unwrap();
 
         loop {
             let msg = tokio::select! {
@@ -392,9 +418,9 @@ impl PageServerHandler {
             // the data added to the relation prior to the move.
             let response = match neon_fe_msg {
                 PagestreamFeMessage::Exists(mut req) => {
-                    let _timer = metrics.get_rel_exists.start_timer();
-                    match get_timeline_by_region_id(&timelines, req.region) {
-                        Ok(timeline) => {
+                    match get_timeline_and_metrics_by_region_id(&timelines, &metrics, req.region) {
+                        Ok((timeline, metrics)) => {
+                            let _timer = metrics.get_rel_exists.start_timer();
                             match self
                                 .handle_get_rel_exists_request(timeline.as_ref(), &req, &ctx)
                                 .await
@@ -412,9 +438,9 @@ impl PageServerHandler {
                     }
                 }
                 PagestreamFeMessage::Nblocks(mut req) => {
-                    let _timer = metrics.get_rel_size.start_timer();
-                    match get_timeline_by_region_id(&timelines, req.region) {
-                        Ok(timeline) => {
+                    match get_timeline_and_metrics_by_region_id(&timelines, &metrics, req.region) {
+                        Ok((timeline, metrics)) => {
+                            let _timer = metrics.get_rel_size.start_timer();
                             match self.handle_get_nblocks_request(&timeline, &req, &ctx).await {
                                 res @ Ok(_) => res,
                                 Err(_) => {
@@ -429,9 +455,9 @@ impl PageServerHandler {
                     }
                 }
                 PagestreamFeMessage::GetPage(mut req) => {
-                    let _timer = metrics.get_page_at_lsn.start_timer();
-                    match get_timeline_by_region_id(&timelines, req.region) {
-                        Ok(timeline) => {
+                    match get_timeline_and_metrics_by_region_id(&timelines, &metrics, req.region) {
+                        Ok((timeline, metrics)) => {
+                            let _timer = metrics.get_page_at_lsn.start_timer();
                             match self
                                 .handle_get_page_at_lsn_request(&timeline, &req, &ctx)
                                 .await
@@ -449,16 +475,18 @@ impl PageServerHandler {
                     }
                 }
                 PagestreamFeMessage::DbSize(req) => {
-                    let _timer = metrics.get_db_size.start_timer();
-                    match get_timeline_by_region_id(&timelines, req.region) {
-                        Ok(timeline) => self.handle_db_size_request(&timeline, &req, &ctx).await,
+                    match get_timeline_and_metrics_by_region_id(&timelines, &metrics, req.region) {
+                        Ok((timeline, metrics)) => {
+                            let _timer = metrics.get_db_size.start_timer();
+                            self.handle_db_size_request(&timeline, &req, &ctx).await
+                        }
                         Err(e) => Err(e),
                     }
                 }
                 PagestreamFeMessage::GetSlruPage(req) => {
-                    let _timer = metrics.get_slru_page.start_timer();
-                    match get_timeline_by_region_id(&timelines, req.region) {
-                        Ok(timeline) => {
+                    match get_timeline_and_metrics_by_region_id(&timelines, &metrics, req.region) {
+                        Ok((timeline, metrics)) => {
+                            let _timer = metrics.get_slru_page.start_timer();
                             self.handle_get_slru_page_at_lsn_request(&timeline, &req, &ctx)
                                 .await
                         }
@@ -466,9 +494,11 @@ impl PageServerHandler {
                     }
                 }
                 PagestreamFeMessage::GetLatestLsn(req) => {
-                    let _timer = metrics.get_latest_lsn.start_timer();
-                    match get_timeline_by_region_id(&timelines, req.region) {
-                        Ok(timeline) => self.handle_get_latest_lsn_request(&timeline, &ctx).await,
+                    match get_timeline_and_metrics_by_region_id(&timelines, &metrics, req.region) {
+                        Ok((timeline, metrics)) => {
+                            let _timer = metrics.get_latest_lsn.start_timer();
+                            self.handle_get_latest_lsn_request(&timeline, &ctx).await
+                        }
                         Err(e) => Err(e),
                     }
                 }
@@ -1304,12 +1334,19 @@ fn get_timelines_indexed_by_region_id(
     Ok(map)
 }
 
-fn get_timeline_by_region_id(
-    index: &HashMap<RegionId, Arc<Timeline>>,
+fn get_timeline_and_metrics_by_region_id<'a>(
+    timeline_index: &HashMap<RegionId, Arc<Timeline>>,
+    metrics_index: &'a HashMap<RegionId, PageRequestMetrics>,
     region_id: RegionId,
-) -> anyhow::Result<Arc<Timeline>> {
-    index
+) -> anyhow::Result<(Arc<Timeline>, &'a PageRequestMetrics)> {
+    timeline_index
         .get(&region_id)
         .map(Arc::to_owned)
         .ok_or_else(|| anyhow::anyhow!("region {} does not exists", region_id))
+        .and_then(|timeline| {
+            metrics_index
+                .get(&region_id)
+                .ok_or_else(|| anyhow::anyhow!("region {} does not have metrics", region_id))
+                .map(|metrics| (timeline, metrics))
+        })
 }
