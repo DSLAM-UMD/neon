@@ -70,7 +70,7 @@ networks:
 services:
   storage_broker:
     restart: always
-    image: ${REPOSITORY:-neondatabase}/neon:${TAG:-latest}
+    image: ctring/neon:${TAG:-latest}
     ports:
       - 50051:50051
     command:
@@ -210,7 +210,7 @@ services:
   #         - node.labels.region==0
 
   xactserver-r0: &xactserver
-    image: ctring/xactserver:${TAG:-latest}
+    image: ctring/xactserver:${XACTSERVER_TAG:-latest}
     environment:
       - NODE_ID=0
       - CONNECT_PG=postgresql://cloud_admin@compute-r0:55432/postgres
