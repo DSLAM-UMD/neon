@@ -464,7 +464,7 @@ impl PageServerHandler {
             .collect::<HashMap<_, _>>();
 
         // Remotexact
-        let (main_timeline, _) =
+        let (main_timeline, main_metrics) =
             get_timeline_and_metrics_by_region_id(&timelines, &metrics, RegionId(0)).unwrap();
 
         loop {
@@ -515,13 +515,16 @@ impl PageServerHandler {
                 PagestreamFeMessage::Exists(mut req) => {
                     match get_timeline_and_metrics_by_region_id(&timelines, &metrics, req.region) {
                         Ok((timeline, metrics)) => {
-                            let _timer = metrics.get_rel_exists.start_timer();
+                            let timer = metrics.get_rel_exists.start_timer();
                             match self
                                 .handle_get_rel_exists_request(timeline.as_ref(), &req, &ctx)
                                 .await
                             {
                                 res @ Ok(_) => res,
                                 Err(_) => {
+                                    timer.stop_and_record();
+                                    // Start a new timer for the main timeline
+                                    let _timer = main_metrics.get_rel_exists.start_timer();
                                     req.latest = true;
                                     req.lsn = Lsn(0);
                                     self.handle_get_rel_exists_request(&main_timeline, &req, &ctx)
@@ -535,10 +538,13 @@ impl PageServerHandler {
                 PagestreamFeMessage::Nblocks(mut req) => {
                     match get_timeline_and_metrics_by_region_id(&timelines, &metrics, req.region) {
                         Ok((timeline, metrics)) => {
-                            let _timer = metrics.get_rel_size.start_timer();
+                            let timer = metrics.get_rel_size.start_timer();
                             match self.handle_get_nblocks_request(&timeline, &req, &ctx).await {
                                 res @ Ok(_) => res,
                                 Err(_) => {
+                                    timer.stop_and_record();
+                                    // Start a new timer for the main timeline
+                                    let _timer = main_metrics.get_rel_size.start_timer();
                                     req.latest = true;
                                     req.lsn = Lsn(0);
                                     self.handle_get_nblocks_request(&main_timeline, &req, &ctx)
@@ -552,13 +558,16 @@ impl PageServerHandler {
                 PagestreamFeMessage::GetPage(mut req) => {
                     match get_timeline_and_metrics_by_region_id(&timelines, &metrics, req.region) {
                         Ok((timeline, metrics)) => {
-                            let _timer = metrics.get_page_at_lsn.start_timer();
+                            let timer = metrics.get_page_at_lsn.start_timer();
                             match self
                                 .handle_get_page_at_lsn_request(&timeline, &req, &ctx)
                                 .await
                             {
                                 res @ Ok(_) => res,
                                 Err(_) => {
+                                    timer.stop_and_record();
+                                    // Start a new timer for the main timeline
+                                    let _timer = main_metrics.get_page_at_lsn.start_timer();
                                     req.latest = true;
                                     req.lsn = Lsn(0);
                                     self.handle_get_page_at_lsn_request(&main_timeline, &req, &ctx)
