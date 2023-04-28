@@ -65,6 +65,26 @@ pub static STORAGE_TIME_GLOBAL: Lazy<HistogramVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+static LOOKUP_CACHE_TIME: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "pageserver_getpage_lookup_cache_seconds",
+        "Time spent in lookup_cached_page",
+        &["tenant_id", "timeline_id"],
+        get_buckets_for_critical_operations(),
+    )
+    .expect("failed to define a metric")
+});
+
+static GET_RECONSTRUCT_DATA_TIME: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "pageserver_getpage_get_reconstruct_data_seconds",
+        "Time spent in get_reconstruct_data",
+        &["tenant_id", "timeline_id"],
+        get_buckets_for_critical_operations(),
+    )
+    .expect("failed to define a metric")
+});
+
 // Metrics collected on operations on the storage repository.
 static RECONSTRUCT_TIME: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
@@ -493,6 +513,8 @@ impl StorageTimeMetrics {
 pub struct TimelineMetrics {
     tenant_id: String,
     timeline_id: String,
+    pub lookup_cache_time_histo: Histogram,
+    pub get_reconstruct_data_time_histo: Histogram,
     pub reconstruct_time_histo: Histogram,
     pub materialized_page_cache_hit_counter: GenericCounter<AtomicU64>,
     pub flush_time_histo: StorageTimeMetrics,
@@ -515,6 +537,12 @@ impl TimelineMetrics {
     pub fn new(tenant_id: &TenantId, timeline_id: &TimelineId) -> Self {
         let tenant_id = tenant_id.to_string();
         let timeline_id = timeline_id.to_string();
+        let lookup_cache_time_histo = LOOKUP_CACHE_TIME
+            .get_metric_with_label_values(&[&tenant_id, &timeline_id])
+            .unwrap();
+        let get_reconstruct_data_time_histo = GET_RECONSTRUCT_DATA_TIME
+            .get_metric_with_label_values(&[&tenant_id, &timeline_id])
+            .unwrap();
         let reconstruct_time_histo = RECONSTRUCT_TIME
             .get_metric_with_label_values(&[&tenant_id, &timeline_id])
             .unwrap();
@@ -553,6 +581,8 @@ impl TimelineMetrics {
         TimelineMetrics {
             tenant_id,
             timeline_id,
+            lookup_cache_time_histo,
+            get_reconstruct_data_time_histo,
             reconstruct_time_histo,
             materialized_page_cache_hit_counter,
             flush_time_histo,

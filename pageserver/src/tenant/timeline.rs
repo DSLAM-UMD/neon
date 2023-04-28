@@ -497,6 +497,7 @@ impl Timeline {
         // The cached image can be returned directly if there is no WAL between the cached image
         // and requested LSN. The cached image can also be used to reduce the amount of WAL needed
         // for redo.
+        let timer = self.metrics.lookup_cache_time_histo.start_timer();
         let cached_page_img = match self.lookup_cached_page(&key, lsn) {
             Some((cached_lsn, cached_img)) => {
                 match cached_lsn.cmp(&lsn) {
@@ -510,14 +511,17 @@ impl Timeline {
             }
             None => None,
         };
+        timer.stop_and_record();
 
         let mut reconstruct_state = ValueReconstructState {
             records: Vec::new(),
             img: cached_page_img,
         };
 
+        let timer = self.metrics.get_reconstruct_data_time_histo.start_timer();
         self.get_reconstruct_data(key, lsn, &mut reconstruct_state, ctx)
             .await?;
+        timer.stop_and_record();
 
         self.metrics
             .reconstruct_time_histo
