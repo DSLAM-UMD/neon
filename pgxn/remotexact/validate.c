@@ -155,7 +155,7 @@ validate_table_scan(RWSetRelation *rw_rel)
              * Extract xmax based on whether it is a multixact or not
              */
             if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
-                xmax = HeapTupleGetUpdateXid(tuple);
+                xmax = HeapTupleGetUpdateXid(current_region, tuple);
             else
                 xmax = HeapTupleHeaderGetRawXmax(tuple);
 
