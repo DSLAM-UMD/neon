@@ -303,7 +303,7 @@ rx_collect_insert(Relation relation, HeapTuple newtuple)
 	// TODO(ctring): logicalrep_write_insert in postgres 15 requires a tuple slot,
 	//				  so creating it here to make things compile for now. This
 	//				  might not be efficient and should be revised.
-	newslot = MakeTupleTableSlot(RelationGetDescr(relation), &TTSOpsHeapTuple);
+	newslot = MakeSingleTupleTableSlot(RelationGetDescr(relation), &TTSOpsHeapTuple);
 	ExecStoreHeapTuple(newtuple, newslot, false);
 	/* Encode the insert using the logical replication protocol */
 	logicalrep_write_insert(buf,
@@ -312,6 +312,7 @@ rx_collect_insert(Relation relation, HeapTuple newtuple)
 							newslot,
 							true /* binary */,
 							NULL /* columns */);
+	ExecDropSingleTupleTableSlot(newslot);
 #else
 	/* Encode the insert using the logical replication protocol */
 	logicalrep_write_insert(buf, InvalidTransactionId, relation, newtuple, true /* binary */);
@@ -361,9 +362,9 @@ rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple)
 	// TODO(ctring): logicalrep_write_update in postgres 15 requires tuple slots,
 	//				  so creating them here to make things compile for now. This
 	//				  might not be efficient and should be revised.
-	oldslot = MakeTupleTableSlot(RelationGetDescr(relation), &TTSOpsHeapTuple);
+	oldslot = MakeSingleTupleTableSlot(RelationGetDescr(relation), &TTSOpsHeapTuple);
 	ExecStoreHeapTuple(oldtuple, oldslot, false);
-	newslot = MakeTupleTableSlot(RelationGetDescr(relation), &TTSOpsHeapTuple);
+	newslot = MakeSingleTupleTableSlot(RelationGetDescr(relation), &TTSOpsHeapTuple);
 	ExecStoreHeapTuple(newtuple, newslot, false);
 	/* Encode the update using the logical replication protocol */
 	logicalrep_write_update(buf,
@@ -373,6 +374,8 @@ rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple)
 							newslot,
 							true /* binary */,
 							NULL /* columns */);
+	ExecDropSingleTupleTableSlot(oldslot);
+	ExecDropSingleTupleTableSlot(newslot);
 #else
 	/* Encode the update using the logical replication protocol */
 	logicalrep_write_update(buf, InvalidTransactionId, relation, oldtuple, newtuple, true /* binary */);
@@ -424,10 +427,11 @@ rx_collect_delete(Relation relation, HeapTuple oldtuple)
 	// TODO(ctring): logicalrep_write_delete in postgres 15 requires a tuple slot,
 	//				  so creating it here to make things compile for now. This
 	//				  might not be efficient and should be revised.
-	oldslot = MakeTupleTableSlot(RelationGetDescr(relation), &TTSOpsHeapTuple);
+	oldslot = MakeSingleTupleTableSlot(RelationGetDescr(relation), &TTSOpsHeapTuple);
 	ExecStoreHeapTuple(oldtuple, oldslot, false);
 	/* Encode the delete using the logical replication protocol */
 	logicalrep_write_delete(buf, InvalidTransactionId, relation, oldslot, true /* binary */, NULL /* columns */);
+	ExecDropSingleTupleTableSlot(oldslot);
 #else
 	/* Encode the delete using the logical replication protocol */
 	logicalrep_write_delete(buf, InvalidTransactionId, relation, oldtuple, true /* binary */);
