@@ -212,9 +212,6 @@ extern char *neon_timeline;
 extern char *neon_tenant;
 extern bool wal_redo;
 extern int32 max_cluster_size;
-extern bool neon_slru_clog;
-extern bool neon_slru_multixact;
-extern bool neon_slru_csnlog;
 
 extern const f_smgr *smgr_neon(BackendId backend, RelFileNode rnode);
 extern void smgr_init_neon(void);

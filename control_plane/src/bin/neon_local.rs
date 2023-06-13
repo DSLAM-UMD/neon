@@ -1222,7 +1222,7 @@ fn cli() -> Command {
                     .arg(hot_standby_arg)
                     .arg(safekeepers_arg)
                     .arg(remote_ext_config_args)
-                    .arg(region_id_arg.clone())
+                    .arg(region_id_arg)
                     .arg(valgrind_arg)
                 )
                 .subcommand(
