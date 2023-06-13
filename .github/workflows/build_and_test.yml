@@ -92,6 +92,8 @@ jobs:
     container:
       image: neondatabase/rust:pinned
       options: --init --user root
+    env:
+      GIT_VERSION: ${{ github.sha }}
 
     steps:
       - name: Checkout
@@ -115,21 +117,24 @@ jobs:
       - name: Get postgres headers
         run: make postgres-headers -j$(nproc)
 
-      # cargo hack runs the given cargo subcommand (clippy in this case) for all feature combinations.
-      # This will catch compiler & clippy warnings in all feature combinations.
-      # TODO: use cargo hack for build and test as well, but, that's quite expensive.
-      # NB: keep clippy args in sync with ./run_clippy.sh
-      - run: |
-          CLIPPY_COMMON_ARGS="$( source .neon_clippy_args; echo "$CLIPPY_COMMON_ARGS")"
-          if [ "$CLIPPY_COMMON_ARGS" = "" ]; then
-            echo "No clippy args found in .neon_clippy_args"
-            exit 1
-          fi
-          echo "CLIPPY_COMMON_ARGS=${CLIPPY_COMMON_ARGS}" >> $GITHUB_ENV
-      - name: Run cargo clippy (debug)
-        run: cargo hack --feature-powerset clippy $CLIPPY_COMMON_ARGS
-      - name: Run cargo clippy (release)
-        run: cargo hack --feature-powerset clippy --release $CLIPPY_COMMON_ARGS
+      - name: Run cargo clippy
+        run: ./run_clippy.sh
+
+      # # cargo hack runs the given cargo subcommand (clippy in this case) for all feature combinations.
+      # # This will catch compiler & clippy warnings in all feature combinations.
+      # # TODO: use cargo hack for build and test as well, but, that's quite expensive.
+      # # NB: keep clippy args in sync with ./run_clippy.sh
+      # - run: |
+      #     CLIPPY_COMMON_ARGS="$( source .neon_clippy_args; echo "$CLIPPY_COMMON_ARGS")"
+      #     if [ "$CLIPPY_COMMON_ARGS" = "" ]; then
+      #       echo "No clippy args found in .neon_clippy_args"
+      #       exit 1
+      #     fi
+      #     echo "CLIPPY_COMMON_ARGS=${CLIPPY_COMMON_ARGS}" >> $GITHUB_ENV
+      # - name: Run cargo clippy (debug)
+      #   run: cargo hack --feature-powerset clippy $CLIPPY_COMMON_ARGS
+      # - name: Run cargo clippy (release)
+      #   run: cargo hack --feature-powerset clippy --release $CLIPPY_COMMON_ARGS
 
       - name: Check documentation generation
         run: cargo doc --workspace --no-deps --document-private-items
@@ -288,7 +293,10 @@ jobs:
         run: su nonroot -c "mold -run make postgres-v15 -j$(nproc)"
 
       - name: Build neon extensions
-        run: su nonroot -c "mold -run make neon-pg-ext -j$(nproc)"
+        run: |
+          apt update
+          apt install -y libcurl4-openssl-dev
+          su nonroot -c "mold -run make neon-pg-ext -j$(nproc)"
 
       - name: Run cargo build
         run: su nonroot -c "${cov_prefix} mold -run cargo build $CARGO_FLAGS $CARGO_FEATURES --bins --tests"

@@ -8,6 +8,10 @@ ARG TAG=pinned
 
 # Build Postgres
 FROM $REPOSITORY/$IMAGE:$TAG AS pg-build
+
+USER root
+RUN set -e && apt update && apt install -y libcurl4-openssl-dev
+
 USER nonroot
 WORKDIR /home/nonroot
 
