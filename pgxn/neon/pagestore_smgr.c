@@ -3046,7 +3046,9 @@ neon_slru_is_remote_page(SlruCtl ctl, BlockNumber blkno)
 	const char *dir = ctl->Dir;
 	int region = BlockNumberToRegion(blkno);
 
-	return neon_slru_csnlog && RegionIsRemote(region) && strcmp(dir, "pg_csn") == 0;
+	return RegionIsRemote(region) && (
+		strcmp(dir, "pg_csn") == 0 || strcmp(dir, "pg_multixact/members") == 0 || strcmp(dir, "pg_multixact/offsets") == 0
+	);
 }
 
 /**

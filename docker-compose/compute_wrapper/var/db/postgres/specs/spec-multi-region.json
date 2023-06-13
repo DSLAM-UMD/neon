@@ -129,11 +129,6 @@
                 "vartype": "string"
             },
             {
-                "name": "neon.slru_csnlog",
-                "value": "on",
-                "vartype": "bool"
-            },
-            {
                 "name": "enable_csn_snapshot",
                 "value": "on",
                 "vartype": "bool"
