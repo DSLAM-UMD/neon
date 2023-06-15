@@ -110,12 +110,15 @@ postgres-%: postgres-configure-% \
 	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$*/contrib/pageinspect install
 	+@echo "Compiling amcheck $*"
 	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$*/contrib/amcheck install
+	+@echo "Compiling pg_stat_statements $*"
+	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$*/contrib/pg_stat_statements install
 
 .PHONY: postgres-clean-%
 postgres-clean-%:
 	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$* MAKELEVEL=0 clean
 	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$*/contrib/pg_buffercache clean
 	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$*/contrib/pageinspect clean
+	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$*/contrib/pg_stat_statements clean
 	$(MAKE) -C $(POSTGRES_INSTALL_DIR)/build/$*/src/interfaces/libpq clean
 
 .PHONY: neon-pg-ext-%
