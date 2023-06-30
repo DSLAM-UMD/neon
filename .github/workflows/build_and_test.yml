@@ -697,7 +697,7 @@ jobs:
                            --context .
                            --build-arg GIT_VERSION=${{ github.event.pull_request.head.sha || github.sha }}
                            --build-arg BUILD_TAG=${{needs.tag.outputs.build-tag}}
-                           --build-arg REPOSITORY=ctring
+                           --build-arg REPOSITORY=neondatabase
                            --dockerfile Dockerfile.compute-tools
                            --destination ctring/compute-tools:${{needs.tag.outputs.build-tag}}
 
@@ -740,7 +740,7 @@ jobs:
                            --build-arg GIT_VERSION=${{ github.event.pull_request.head.sha || github.sha }}
                            --build-arg PG_VERSION=${{ matrix.version }}
                            --build-arg BUILD_TAG=${{needs.tag.outputs.build-tag}}
-                           --build-arg REPOSITORY=ctring
+                           --build-arg REPOSITORY=neondatabase
                            --dockerfile Dockerfile.compute-node
                            --destination ctring/compute-node-${{ matrix.version }}:${{needs.tag.outputs.build-tag}}
                            --cleanup
@@ -766,7 +766,7 @@ jobs:
                            --build-arg GIT_VERSION=${{ github.event.pull_request.head.sha || github.sha }} \
                            --build-arg PG_VERSION=${{ matrix.version }} \
                            --build-arg BUILD_TAG=${{needs.tag.outputs.build-tag}} \
-                           --build-arg REPOSITORY=ctring \
+                           --build-arg REPOSITORY=neondatabase \
                            --dockerfile Dockerfile.compute-node \
                            --destination ctring/extensions-${{ matrix.version }}:${{needs.tag.outputs.build-tag}} \
                            --cleanup \
