@@ -4411,8 +4411,13 @@ mod tests {
         let harness = TenantHarness::create(name)?;
         {
             let (tenant, ctx) = harness.load().await;
-            let tline =
-                tenant.create_empty_timeline(TIMELINE_ID, Lsn(0), DEFAULT_PG_VERSION, &ctx)?;
+            let tline = tenant.create_empty_timeline(
+                TIMELINE_ID,
+                Lsn(0),
+                DEFAULT_PG_VERSION,
+                RegionId(0),
+                &ctx,
+            )?;
             // Keeps uninit mark in place
             std::mem::forget(tline);
         }
