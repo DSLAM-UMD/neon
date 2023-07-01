@@ -14,9 +14,9 @@
 #       
 #       docker compose -f docker-compose-multi-region.yml up -d
 #
-#   - The compute node will be available on port 55432:
+#   - The compute node will be available on port 55433:
 #
-#       psql -p55432 -h localhost -U cloud_admin postgres
+#       psql -p55433 -h localhost -U cloud_admin postgres
 #
 #   - To stop this stack, run:
 #
@@ -213,7 +213,7 @@ services:
     image: ctring/xactserver:${XACTSERVER_TAG:-latest}
     environment:
       - NODE_ID=0
-      - CONNECT_PG=postgresql://cloud_admin@compute-r0:55432/postgres
+      - CONNECT_PG=postgresql://cloud_admin@compute-r0:55433/postgres
       - NODES=http://xactserver-r0:23000,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
       - RUST_LOG=${RUST_LOG:-info}
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
@@ -256,7 +256,7 @@ services:
       - source: valgrind_supp
         target: /shell/valgrind.supp
     ports:
-      - 55432:55432 # pg protocol handler
+      - 55432:55433 # pg protocol handler
       - 3080:3080 # http endpoints
     entrypoint:
       - "/shell/compute-multi-region.sh"
@@ -276,7 +276,7 @@ services:
     restart: always
     image: quay.io/prometheuscommunity/postgres-exporter:master
     environment:
-      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r0:55432/postgres?sslmode=disable
+      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r0:55433/postgres?sslmode=disable
     depends_on:
       - compute-r0
     deploy:
@@ -360,7 +360,7 @@ services:
     <<: *xactserver
     environment:
       - NODE_ID=1
-      - CONNECT_PG=postgresql://cloud_admin@compute-r1:55432/postgres
+      - CONNECT_PG=postgresql://cloud_admin@compute-r1:55433/postgres
       - NODES=http://xactserver-r0:23000,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
       - RUST_LOG=${RUST_LOG:-info}
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
@@ -382,7 +382,7 @@ services:
       - REGION=1
       - XACTSERVER=xactserver-r1:10000
     ports:
-      - 55433:55432 # pg protocol handler
+      - 55433:55433 # pg protocol handler
       - 3081:3080 # http endpoints
     depends_on:
       - safekeeper-r1-1
@@ -399,7 +399,7 @@ services:
   compute-metrics-exporter-r1:
     <<: *compute-metrics-exporter
     environment:
-      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r1:55432/postgres?sslmode=disable
+      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r1:55433/postgres?sslmode=disable
     depends_on:
       - compute-r1
     deploy:
@@ -483,7 +483,7 @@ services:
     <<: *xactserver
     environment:
       - NODE_ID=2
-      - CONNECT_PG=postgresql://cloud_admin@compute-r2:55432/postgres
+      - CONNECT_PG=postgresql://cloud_admin@compute-r2:55433/postgres
       - NODES=http://xactserver-r0:23000,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
       - RUST_LOG=${RUST_LOG:-info}
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
@@ -505,7 +505,7 @@ services:
       - REGION=2
       - XACTSERVER=xactserver-r2:10000
     ports:
-      - 55434:55432 # pg protocol handler
+      - 55434:55433 # pg protocol handler
       - 3082:3080 # http endpoints
     depends_on:
       - safekeeper-r2-1
@@ -522,7 +522,7 @@ services:
   compute-metrics-exporter-r2:
     <<: *compute-metrics-exporter
     environment:
-      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r2:55432/postgres?sslmode=disable
+      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r2:55433/postgres?sslmode=disable
     depends_on:
       - compute-r2
     deploy:
@@ -606,7 +606,7 @@ services:
     <<: *xactserver
     environment:
       - NODE_ID=3
-      - CONNECT_PG=postgresql://cloud_admin@compute-r3:55432/postgres
+      - CONNECT_PG=postgresql://cloud_admin@compute-r3:55433/postgres
       - NODES=http://xactserver-r0:23000,http://xactserver-r1:23000,http://xactserver-r2:23000,http://xactserver-r3:23000
       - RUST_LOG=${RUST_LOG:-info}
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
@@ -628,7 +628,7 @@ services:
       - REGION=3
       - XACTSERVER=xactserver-r3:10000
     ports:
-      - 55435:55432 # pg protocol handler
+      - 55435:55433 # pg protocol handler
       - 3083:3080 # http endpoints
     depends_on:
       - safekeeper-r3-1
@@ -645,7 +645,7 @@ services:
   compute-metrics-exporter-r3:
     <<: *compute-metrics-exporter
     environment:
-      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r3:55432/postgres?sslmode=disable
+      - DATA_SOURCE_NAME=postgresql://cloud_admin@compute-r3:55433/postgres?sslmode=disable
     depends_on:
       - compute-r3
     deploy:
