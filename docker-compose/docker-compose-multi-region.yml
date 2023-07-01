@@ -14,9 +14,9 @@
 #       
 #       docker compose -f docker-compose-multi-region.yml up -d
 #
-#   - The compute node will be available on port 55433:
+#   - The compute node will be available on port 55432:
 #
-#       psql -p55433 -h localhost -U cloud_admin postgres
+#       psql -p55432 -h localhost -U cloud_admin postgres
 #
 #   - To stop this stack, run:
 #
@@ -29,11 +29,6 @@
 #   - Run the prepare script:
 #
 #       ./prepare-multi-region.sh swarm <path to neon data (.neon)>
-#
-#   - Build and push the compute image:
-#
-#       docker compose -f docker-compose-multi-region.yml build
-#       docker compose -f docker-compose-multi-region.yml push
 #
 #   - Start this stack in the swarm:
 #
@@ -75,7 +70,7 @@ networks:
 services:
   storage_broker:
     restart: always
-    image: ${REPOSITORY:-neondatabase}/neon:${TAG:-latest}
+    image: ctring/neon:${TAG:-latest}
     ports:
       - 50051:50051
     command:
@@ -102,9 +97,9 @@ services:
       - 3000:3000
 
   #############################################
-  #                 REGION 1                  #
+  #                 REGION 0                  #
   #############################################
-  pageserver-r1: &pageserver
+  pageserver-r0: &pageserver
     restart: always
     image: ctring/neon:${TAG:-latest}
     environment:
@@ -137,13 +132,13 @@ services:
       placement:
         constraints:
           - node.labels.has_pageserver==true
-          - node.labels.region==1
+          - node.labels.region==0
 
-  safekeeper-r1-1: &safekeeper
+  safekeeper-r0-1: &safekeeper
     restart: always
     image: ctring/neon:${TAG:-latest}
     environment:
-      - SAFEKEEPER_ADVERTISE_URL=safekeeper-r1-1:5454
+      - SAFEKEEPER_ADVERTISE_URL=safekeeper-r0-1:5454
       - SAFEKEEPER_ID=1
       - BROKER_ENDPOINT=http://storage_broker:50051
       # - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
@@ -152,7 +147,7 @@ services:
       # While other services can connect to a safekeeper using its name, the safekeeper
       # itself cannot resolve its own name (?!), hence cannot bind to the listen-pg 
       # address. This line tricks the safekeeper to bind to 0.0.0.0.
-      - safekeeper-r1-1:0.0.0.0
+      - safekeeper-r0-1:0.0.0.0
     ports:
       #- 5454:5454 # pg protocol handler
       - 7676:7676 # http endpoints
@@ -178,44 +173,44 @@ services:
       placement:
         constraints:
           - node.labels.has_safekeeper1==true
-          - node.labels.region==1
+          - node.labels.region==0
 
-  # safekeeper-r1-2:
+  # safekeeper-r0-2:
   #   <<: *safekeeper
   #   environment:
-  #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r1-2:5454
+  #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r0-2:5454
   #     - SAFEKEEPER_ID=2
   #     - BROKER_ENDPOINT=http://storage_broker:50051
   #     #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
   #     #- RUST_LOG=${RUST_LOG:-info}
   #   extra_hosts:
-  #     - safekeeper-r1-2:0.0.0.0
+  #     - safekeeper-r0-2:0.0.0.0
   #   ports: []
   #   deploy:
   #     placement:
   #       constraints:
   #         - node.labels.has_safekeeper2==true
-  #         - node.labels.region==1
+  #         - node.labels.region==0
 
-  # safekeeper-r1-3:
+  # safekeeper-r0-3:
   #   <<: *safekeeper
   #   environment:
-  #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r1-3:5454
+  #     - SAFEKEEPER_ADVERTISE_URL=safekeeper-r0-3:5454
   #     - SAFEKEEPER_ID=3
   #     - BROKER_ENDPOINT=http://storage_broker:50051
   #     #- RUST_BACKTRACE=${RUST_BACKTRACE:-0}
   #     #- RUST_LOG=${RUST_LOG:-info}
   #   extra_hosts:
-  #     - safekeeper-r1-3:0.0.0.0
+  #     - safekeeper-r0-3:0.0.0.0
   #   ports: []
   #   deploy:
   #     placement:
   #       constraints:
   #         - node.labels.has_safekeeper3==true
-  #         - node.labels.region==1
+  #         - node.labels.region==0
 
-  xactserver-r1: &xactserver
-    image: ctring/xactserver:${TAG:-latest}
+  xactserver-r0: &xactserver
+    image: ctring/xactserver:${XACTSERVER_TAG:-latest}
     environment:
       - NODE_ID=0
       - CONNECT_PG=postgresql://cloud_admin@compute-r0:55432/postgres
@@ -223,7 +218,7 @@ services:
       - RUST_LOG=${RUST_LOG:-info}
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
     extra_hosts:
-      - xactserver-r1:0.0.0.0
+      - xactserver-r0:0.0.0.0
     entrypoint:
       - "/bin/sh"
       - "-c"
@@ -239,27 +234,18 @@ services:
       placement:
         constraints:
           - node.labels.has_xactserver==true
-          - node.labels.region==1
+          - node.labels.region==0
 
-  compute-r1: &compute
+  compute-r0: &compute
     restart: always
-    build:
-      context: ./compute_wrapper/
-      args:
-        - REPOSITORY=ctring
-        - COMPUTE_IMAGE=compute-node-v${PG_VERSION:-14}
-        - TAG=${TAG:-latest}
-        - http_proxy=$http_proxy
-        - https_proxy=$https_proxy
-    image: localhost:5000/compute-node-multi-region-v${PG_VERSION:-14}:${TAG:-latest}
+    image: ctring/compute-node-v${PG_VERSION:-14}:${TAG:-latest}
     environment:
       - PG_VERSION=${PG_VERSION:-14}
-      - PAGESERVER_HOST=pageserver-r1
-      - SAFEKEEPERS_ADDR=safekeeper-r1-1:5454
-      # - SAFEKEEPERS_ADDR=safekeeper-r1-1:5454,safekeeper-r1-2:5454,safekeeper-r1-3:5454
-      - REGION=1
-      - XACTSERVER=xactserver-r1:10000
-      #- RUST_BACKTRACE=1
+      - PAGESERVER_HOST=pageserver-r0
+      - SAFEKEEPERS_ADDR=safekeeper-r0-1:5454
+      # - SAFEKEEPERS_ADDR=safekeeper-r0-1:5454,safekeeper-r0-2:5454,safekeeper-r0-3:5454
+      - REGION=0
+      - XACTSERVER=xactserver-r0:10000
     # Mount these as configs instead of volumes so that it works correctly in swarm mode
     configs:
       - source: compute_spec
@@ -270,7 +256,8 @@ services:
       - source: valgrind_supp
         target: /shell/valgrind.supp
     ports:
-      - 55433:55433 # pg protocol handler
+      - 55432:55432 # pg protocol handler
+      - 3080:3080 # http endpoints
     entrypoint:
       - "/shell/compute-multi-region.sh"
     depends_on:
@@ -434,7 +421,7 @@ services:
       - RUST_LOG=${RUST_LOG:-info}
     ports:
        #- 6400:6400  # pg protocol handler
-       - 9899:9898 # http endpoints
+       - 9900:9898 # http endpoints
     deploy:
       placement:
         constraints:
@@ -517,10 +504,9 @@ services:
       # - SAFEKEEPERS_ADDR=safekeeper-r2-1:5454,safekeeper-r2-2:5454,safekeeper-r2-3:5454
       - REGION=2
       - XACTSERVER=xactserver-r2:10000
-      #- RUST_BACKTRACE=1
     ports:
-      - 55434:55433 # pg protocol handler
-      - 3081:3080 # http endpoints
+      - 55434:55432 # pg protocol handler
+      - 3082:3080 # http endpoints
     depends_on:
       - safekeeper-r2-1
       # - safekeeper-r2-2
@@ -558,7 +544,7 @@ services:
       - RUST_LOG=${RUST_LOG:-info}
     ports:
        #- 6400:6400  # pg protocol handler
-       - 9900:9898 # http endpoints
+       - 9901:9898 # http endpoints
     deploy:
       placement:
         constraints:
@@ -641,10 +627,9 @@ services:
       # - SAFEKEEPERS_ADDR=safekeeper-r3-1:5454,safekeeper-r3-2:5454,safekeeper-r3-3:5454
       - REGION=3
       - XACTSERVER=xactserver-r3:10000
-      #- RUST_BACKTRACE=1
     ports:
-      - 55435:55433 # pg protocol handler
-      - 3082:3080 # http endpoints
+      - 55435:55432 # pg protocol handler
+      - 3083:3080 # http endpoints
     depends_on:
       - safekeeper-r3-1
       # - safekeeper-r3-2
