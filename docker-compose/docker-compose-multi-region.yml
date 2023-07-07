@@ -156,12 +156,6 @@ services:
       - "-c"
     command:
       - |
-        until (/usr/bin/mc alias set minio http://minio:9000 minioadmin minioadmin) do
-             echo 'Waiting to start minio...' && sleep 1
-        done
-        rm -rf /data/*
-        /usr/bin/mc cp -r minio/neon/.neon/safekeepers/sk1 /data
-        mv /data/sk1/* . && rm -r /data/sk1
         safekeeper --listen-pg=$$SAFEKEEPER_ADVERTISE_URL \
                    --listen-http='0.0.0.0:7676' \
                    --id=$$SAFEKEEPER_ID \
