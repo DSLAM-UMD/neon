@@ -73,5 +73,7 @@ regex-syntax = { version = "0.7" }
 serde = { version = "1", features = ["alloc", "derive"] }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["extra-traits", "full", "visit-mut"] }
+toml_datetime = { version = "0.6", default-features = false, features = ["serde"] }
+toml_edit = { version = "0.19", features = ["serde"] }
 
 ### END HAKARI SECTION
