@@ -162,6 +162,11 @@
                 "name": "track_counts",
                 "value": "off",
                 "vartype": "bool"
+            },
+            {
+                "name": "track_io_timing",
+                "value": "off",
+                "vartype": "bool"
             }
         ]
     },
