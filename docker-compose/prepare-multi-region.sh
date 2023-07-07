@@ -80,8 +80,8 @@ elif [ "$mode" = "swarm" ]; then
     for node in $(jq -r "keys[]" topology.json); do
       echo "$node"
       for label in $(jq -r ".[\"$node\"][]" topology.json); do
-        echo -n "\t$label..."
-        docker node update --label-add $label $node 1> /dev/null && echo "\033[0;32mOK\033[0m"
+        echo -ne "\t$label..."
+        docker node update --label-add $label $node 1> /dev/null && echo -e "\033[0;32mOK\033[0m"
       done
     done 
   fi
