@@ -4,8 +4,7 @@
     "has_pageserver=true",
     "has_safekeeper1=true",
     "has_compute=true",
-    "has_xactserver=true",
-    "has_benchbase=true"
+    "has_xactserver=true"
   ],
   "ip-172-31-40-83": [
     "region=1",
