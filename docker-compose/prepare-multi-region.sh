@@ -116,7 +116,7 @@ docker volume rm mc-config || true
 alias mc="docker run --rm -it                                         \
                      --network host                                   \
                      --mount source=mc-config,target=/.mc             \
-                     --mount type=bind,source=$neon_data,target=/data \
+                     --mount type=bind,source=$neon_data,target=/.neon \
                      $mc_image -C /.mc"
 
 # We use the same safekeeper data directory for all new safekeepers so their IDs
@@ -131,10 +131,8 @@ mc alias set local http://localhost:9000 minioadmin minioadmin
 mc mb local/neon
 
 # Transfer data to minio
-dest=local/neon/.neon
+dest=local/neon
 echo "Transfering data from \"$neon_data\" to \"$dest\""
-mc cp -r /data/tenants $dest
-mc cp -r /data/safekeepers $dest
-mc cp /data/pageserver.toml $dest
+mc cp -r /.neon $dest
 
 exit 0

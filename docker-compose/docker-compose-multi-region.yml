@@ -6,10 +6,6 @@
 #
 #       ./prepare-multi-region.sh compose <path to neon data (.neon)>
 #
-#   - Build the wrapped compute image:
-#
-#       docker compose -f docker-compose-multi-region.yml build
-#
 #   - Start the stack:
 #       
 #       docker compose -f docker-compose-multi-region.yml up -d
