@@ -4842,7 +4842,10 @@ pub fn compare_arced_layers<L: ?Sized>(left: &Arc<L>, right: &Arc<L>) -> bool {
 mod tests {
     use std::sync::Arc;
 
-    use utils::{id::TimelineId, lsn::Lsn};
+    use utils::{
+        id::{RegionId, TimelineId},
+        lsn::Lsn,
+    };
 
     use crate::tenant::{harness::TenantHarness, storage_layer::PersistentLayer};
 
@@ -4870,7 +4873,7 @@ mod tests {
         let ctx = any_context();
         let tenant = harness.try_load(&ctx, Some(remote_storage)).await.unwrap();
         let timeline = tenant
-            .create_test_timeline(TimelineId::generate(), Lsn(0x10), 14, &ctx)
+            .create_test_timeline(TimelineId::generate(), Lsn(0x10), 14, RegionId(0), &ctx)
             .await
             .unwrap();
 
@@ -4935,7 +4938,7 @@ mod tests {
         let ctx = any_context();
         let tenant = harness.try_load(&ctx, Some(remote_storage)).await.unwrap();
         let timeline = tenant
-            .create_test_timeline(TimelineId::generate(), Lsn(0x10), 14, &ctx)
+            .create_test_timeline(TimelineId::generate(), Lsn(0x10), 14, RegionId(0), &ctx)
             .await
             .unwrap();
 
