@@ -109,8 +109,9 @@ impl SafekeeperNode {
         );
         io::stdout().flush().unwrap();
 
-        let listen_pg = format!("127.0.0.1:{}", self.conf.pg_port);
-        let listen_http = format!("127.0.0.1:{}", self.conf.http_port);
+        let listen_pg = format!("0.0.0.0:{}", self.conf.pg_port);
+        let listen_http = format!("0.0.0.0:{}", self.conf.http_port);
+        let advertise_pg = format!("c220g5-111215:{}", self.conf.pg_port);
         let id = self.id;
         let datadir = self.datadir_path();
 
@@ -135,6 +136,8 @@ impl SafekeeperNode {
             listen_http,
             "--availability-zone".to_owned(),
             availability_zone,
+            "--advertise-pg".to_owned(),
+            advertise_pg,
         ];
         if let Some(pg_tenant_only_port) = self.conf.pg_tenant_only_port {
             let listen_pg_tenant_only = format!("127.0.0.1:{}", pg_tenant_only_port);
@@ -144,8 +147,8 @@ impl SafekeeperNode {
             args.push("--no-sync".to_owned());
         }
 
-        let broker_endpoint = format!("{}", self.env.broker.client_url());
-        args.extend(["--broker-endpoint".to_owned(), broker_endpoint]);
+        let broker_endpoint = "http://c220g5-111215:50051";
+        args.extend(["--broker-endpoint".to_owned(), broker_endpoint.to_owned()]);
 
         let mut backup_threads = String::new();
         if let Some(threads) = self.conf.backup_threads {
