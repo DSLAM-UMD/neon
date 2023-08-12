@@ -249,12 +249,12 @@ impl Endpoint {
     fn setup_pg_conf(&self) -> Result<PostgresConf> {
         let mut conf = PostgresConf::new();
         conf.append("max_wal_senders", "10");
-        conf.append("wal_log_hints", "off");
+        conf.append("wal_log_hints", "on");
         conf.append("max_replication_slots", "10");
         conf.append("hot_standby", "on");
-        conf.append("shared_buffers", "1MB");
+        conf.append("shared_buffers", "8GB");
         conf.append("fsync", "off");
-        conf.append("max_connections", "100");
+        conf.append("max_connections", "1000");
         conf.append("wal_level", "remote_xact");
         // wal_sender_timeout is the maximum time to wait for WAL replication.
         // It also defines how often the walreciever will send a feedback message to the wal sender.
@@ -270,13 +270,18 @@ impl Endpoint {
 
         // Remotexact: Multi-region configurations
         conf.append("enable_csn_snapshot", "on");
-        conf.append("max_prepared_transactions", "64");
+        conf.append("max_prepared_transactions", "128");
         conf.append(
             "remotexact.connstring",
             &format!("postgresql://{}", &self.env.xactserver.listen_pg_addr),
         );
         conf.append("current_region", &self.region_id.to_string());
         conf.append("multi_region", "on");
+        conf.append("log_connections", "on");
+        conf.append("enable_csn_snapshot", "on");
+        conf.append("temp_buffers", "4096");
+        conf.append("track_counts", "off");
+        conf.append("track_io_timing", "off");
 
         conf.append_line("");
         // Replication-related configurations, such as WAL sending
