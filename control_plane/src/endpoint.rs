@@ -133,7 +133,7 @@ impl ComputeControlPlane {
 
         let ep = Arc::new(Endpoint {
             endpoint_id: endpoint_id.to_owned(),
-            pg_address: SocketAddr::new("127.0.0.1".parse().unwrap(), pg_port),
+            pg_address: SocketAddr::new("0.0.0.0".parse().unwrap(), pg_port),
             http_address: SocketAddr::new("127.0.0.1".parse().unwrap(), http_port),
             env: self.env.clone(),
             pageserver: Arc::clone(&self.pageserver),
@@ -222,7 +222,7 @@ impl Endpoint {
             serde_json::from_slice(&std::fs::read(entry.path().join("endpoint.json"))?)?;
 
         Ok(Endpoint {
-            pg_address: SocketAddr::new("127.0.0.1".parse().unwrap(), conf.pg_port),
+            pg_address: SocketAddr::new("0.0.0.0".parse().unwrap(), conf.pg_port),
             http_address: SocketAddr::new("127.0.0.1".parse().unwrap(), conf.http_port),
             endpoint_id,
             env: env.clone(),
