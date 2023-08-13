@@ -3160,7 +3160,7 @@ neon_slru_read_page(SlruCtl ctl, int segno, BlockNumber blkno, XLogRecPtr lsn, c
 	
 	INSTR_TIME_SET_CURRENT(end_time);
 	INSTR_TIME_SUBTRACT(end_time, start_time);
-	elog(LOG, "neon_slru_read_page: %f ms" INSTR_TIME_GET_MILLISEC(end_time));
+	elog(LOG, "neon_slru_read_page: %f ms", INSTR_TIME_GET_MILLISEC(end_time));
 
 	return read_ok;
 }
@@ -3214,7 +3214,7 @@ neon_slru_page_exists(SlruCtl ctl, int segno, BlockNumber blkno)
 
 			INSTR_TIME_SET_CURRENT(end_time);
 			INSTR_TIME_SUBTRACT(end_time, start_time);
-			elog(LOG, "neon_slru_page_exists: %f ms" INSTR_TIME_GET_MILLISEC(end_time));
+			elog(LOG, "neon_slru_page_exists: %f ms", INSTR_TIME_GET_MILLISEC(end_time));
 			return exists;
 
 		case T_NeonErrorResponse:
@@ -3261,7 +3261,7 @@ neon_get_latest_lsn(int region)
 			pfree(resp);
 			INSTR_TIME_SET_CURRENT(end_time);
 			INSTR_TIME_SUBTRACT(end_time, start_time);
-			elog(LOG, "neon_get_latest_lsn: %f ms" INSTR_TIME_GET_MILLISEC(end_time));
+			elog(LOG, "neon_get_latest_lsn: %f ms", INSTR_TIME_GET_MILLISEC(end_time));
 			return latest_lsn;
 
 		case T_NeonErrorResponse:
