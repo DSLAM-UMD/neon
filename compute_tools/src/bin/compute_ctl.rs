@@ -54,7 +54,7 @@ use compute_tools::configurator::launch_configurator;
 use compute_tools::extension_server::{get_pg_version, init_remote_storage};
 use compute_tools::http::api::launch_http_server;
 use compute_tools::logger::*;
-use compute_tools::monitor::launch_monitor;
+// use compute_tools::monitor::launch_monitor;
 use compute_tools::params::*;
 use compute_tools::spec::*;
 
@@ -254,7 +254,7 @@ fn main() -> Result<()> {
     drop(state);
 
     // Launch remaining service threads
-    let _monitor_handle = launch_monitor(&compute);
+    // let _monitor_handle = launch_monitor(&compute);
     let _configurator_handle = launch_configurator(&compute);
 
     // Start Postgres
