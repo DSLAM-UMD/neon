@@ -3241,7 +3241,7 @@ neon_slru_page_exists(SlruCtl ctl, int segno, BlockNumber blkno)
 XLogRecPtr
 neon_get_latest_lsn(int region)
 {
-	instr_time	start_time, end_time;
+	// instr_time	start_time, end_time;
 
 	NeonResponse	*resp;
 	XLogRecPtr		latest_lsn;
@@ -3250,7 +3250,7 @@ neon_get_latest_lsn(int region)
 		.req.region = region,
 	};
 
-	INSTR_TIME_SET_CURRENT(start_time);
+	// INSTR_TIME_SET_CURRENT(start_time);
 
 	resp = page_server_request(&request);
 
@@ -3259,9 +3259,9 @@ neon_get_latest_lsn(int region)
 		case T_NeonGetLatestLsnResponse:
 			latest_lsn = ((NeonGetLatestLsnResponse *) resp)->lsn;
 			pfree(resp);
-			INSTR_TIME_SET_CURRENT(end_time);
-			INSTR_TIME_SUBTRACT(end_time, start_time);
-			elog(LOG, "neon_get_latest_lsn: %f ms", INSTR_TIME_GET_MILLISEC(end_time));
+			// INSTR_TIME_SET_CURRENT(end_time);
+			// INSTR_TIME_SUBTRACT(end_time, start_time);
+			// elog(LOG, "neon_get_latest_lsn: %f ms", INSTR_TIME_GET_MILLISEC(end_time));
 			return latest_lsn;
 
 		case T_NeonErrorResponse:
