@@ -74,7 +74,7 @@ void validate_index_scan(RWSetRelation *rw_rel)
     if (page_lsn > read_csn) {
         ereport(ERROR,
                 (errcode(ERRCODE_T_R_STATEMENT_COMPLETION_UNKNOWN),
-                 errmsg("[remotexact] read out-of-date index data from a remote partition")));
+                 errmsg("[remotexact] read out-of-date index data from a remote partition (index rel_id: %u)", relid)));
     }
 }
 
@@ -178,7 +178,7 @@ validate_table_scan(RWSetRelation *rw_rel)
             CSNLogGetCSNByXid(current_region, checked_xid) > read_csn)
             ereport(ERROR,
                     (errcode(ERRCODE_T_R_STATEMENT_COMPLETION_UNKNOWN),
-                     errmsg("[remotexact] read out-of-date data from a remote partition")));
+                     errmsg("[remotexact] read out-of-date data from a remote partition (table relid: %u)", relid)));
 
     }
 
@@ -236,7 +236,7 @@ validate_tuple_scan(RWSetRelation *rw_rel)
         if (!valid)
             ereport(ERROR,
                     (errcode(ERRCODE_T_R_STATEMENT_COMPLETION_UNKNOWN),
-                     errmsg("[remotexact] read out-of-date tuple data from a remote partition")));
+                     errmsg("[remotexact] read out-of-date tuple data from a remote partition (tuple relid, tid: %u, %u)", relid,rw_rel->tuples[i].tid)));
     }
 
 
