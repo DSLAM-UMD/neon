@@ -770,7 +770,7 @@ xactserver_disconnect(void)
 	 */
 	if (xactserver_connected)
 	{
-		remotexact_log(LOG, "dropping connection to page server due to error");
+		remotexact_log(LOG, "dropping connection to xact server due to error");
 		PQfinish(xactserver_conn);
 		xactserver_conn = NULL;
 		xactserver_connected = false;
