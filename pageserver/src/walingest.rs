@@ -945,7 +945,7 @@ impl<'a> WalIngest<'a> {
     ) -> Result<()> {
         // Create WAL record for updating the multixact-offsets page
         let region: u32 = self.timeline.region_id.0 as u32;
-        let pageno = ((xlrec.mid / pg_constants::MULTIXACT_OFFSETS_PER_PAGE as u32) 
+        let pageno = ((xlrec.mid / pg_constants::MULTIXACT_OFFSETS_PER_PAGE as u32)
             * pg_constants::MAX_REGIONS)
             + region;
         let segno = pageno / pg_constants::SLRU_PAGES_PER_SEGMENT;
@@ -1034,7 +1034,8 @@ impl<'a> WalIngest<'a> {
 
         // PerformMembersTruncation
         let region: u32 = self.timeline.region_id.0 as u32;
-        let maxsegment: i32 = mx_offset_to_member_segment(pg_constants::MAX_MULTIXACT_OFFSET, region);
+        let maxsegment: i32 =
+            mx_offset_to_member_segment(pg_constants::MAX_MULTIXACT_OFFSET, region);
         let startsegment: i32 = mx_offset_to_member_segment(xlrec.start_trunc_memb, region);
         let endsegment: i32 = mx_offset_to_member_segment(xlrec.end_trunc_memb, region);
         let mut segment: i32 = startsegment;
