@@ -944,7 +944,10 @@ impl<'a> WalIngest<'a> {
         xlrec: &XlMultiXactCreate,
     ) -> Result<()> {
         // Create WAL record for updating the multixact-offsets page
-        let pageno = xlrec.mid / pg_constants::MULTIXACT_OFFSETS_PER_PAGE as u32;
+        let region: u32 = self.timeline.region_id.0 as u32;
+        let pageno = ((xlrec.mid / pg_constants::MULTIXACT_OFFSETS_PER_PAGE as u32) 
+            * pg_constants::MAX_REGIONS)
+            + region;
         let segno = pageno / pg_constants::SLRU_PAGES_PER_SEGMENT;
         let rpageno = pageno % pg_constants::SLRU_PAGES_PER_SEGMENT;
 
@@ -955,6 +958,7 @@ impl<'a> WalIngest<'a> {
             NeonWalRecord::MultixactOffsetCreate {
                 mid: xlrec.mid,
                 moff: xlrec.moff,
+                region: region,
             },
         )?;
 
@@ -989,6 +993,7 @@ impl<'a> WalIngest<'a> {
                 NeonWalRecord::MultixactMembersCreate {
                     moff: offset,
                     members: this_page_members,
+                    region: region,
                 },
             )?;
 
@@ -1028,9 +1033,10 @@ impl<'a> WalIngest<'a> {
         self.checkpoint_modified = true;
 
         // PerformMembersTruncation
-        let maxsegment: i32 = mx_offset_to_member_segment(pg_constants::MAX_MULTIXACT_OFFSET);
-        let startsegment: i32 = mx_offset_to_member_segment(xlrec.start_trunc_memb);
-        let endsegment: i32 = mx_offset_to_member_segment(xlrec.end_trunc_memb);
+        let region: u32 = self.timeline.region_id.0 as u32;
+        let maxsegment: i32 = mx_offset_to_member_segment(pg_constants::MAX_MULTIXACT_OFFSET, region);
+        let startsegment: i32 = mx_offset_to_member_segment(xlrec.start_trunc_memb, region);
+        let endsegment: i32 = mx_offset_to_member_segment(xlrec.end_trunc_memb, region);
         let mut segment: i32 = startsegment;
 
         // Delete all the segments except the last one. The last segment can still

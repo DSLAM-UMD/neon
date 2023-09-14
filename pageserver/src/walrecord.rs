@@ -37,11 +37,13 @@ pub enum NeonWalRecord {
     MultixactOffsetCreate {
         mid: MultiXactId,
         moff: MultiXactOffset,
+        region: u32,
     },
     /// Extend multixact members SLRU.
     MultixactMembersCreate {
         moff: MultiXactOffset,
         members: Vec<MultiXactMember>,
+        region: u32
     },
     /// Mark transaction ID as committed with the given LSN on a CsnLog page
     CsnLogSetCommitted {

@@ -512,7 +512,7 @@ impl PostgresRedoManager {
                     transaction_id_set_status(xid, pg_constants::TRANSACTION_STATUS_ABORTED, page);
                 }
             }
-            NeonWalRecord::MultixactOffsetCreate { mid, moff } => {
+            NeonWalRecord::MultixactOffsetCreate { mid, moff, region } => {
                 let (slru_kind, segno, blknum) =
                     key_to_slru_block(key).or(Err(WalRedoError::InvalidRecord))?;
                 assert_eq!(
@@ -523,7 +523,7 @@ impl PostgresRedoManager {
                 );
                 // Compute the block and offset to modify.
                 // See RecordNewMultiXact in PostgreSQL sources.
-                let pageno = mid / pg_constants::MULTIXACT_OFFSETS_PER_PAGE as u32;
+                let pageno = ((mid / pg_constants::MULTIXACT_OFFSETS_PER_PAGE as u32)* pg_constants::MAX_REGIONS) + *region;
                 let entryno = mid % pg_constants::MULTIXACT_OFFSETS_PER_PAGE as u32;
                 let offset = (entryno * 4) as usize;
 
@@ -545,7 +545,7 @@ impl PostgresRedoManager {
 
                 LittleEndian::write_u32(&mut page[offset..offset + 4], *moff);
             }
-            NeonWalRecord::MultixactMembersCreate { moff, members } => {
+            NeonWalRecord::MultixactMembersCreate { moff, members, region } => {
                 let (slru_kind, segno, blknum) =
                     key_to_slru_block(key).or(Err(WalRedoError::InvalidRecord))?;
                 assert_eq!(
@@ -559,7 +559,7 @@ impl PostgresRedoManager {
 
                     // Compute the block and offset to modify.
                     // See RecordNewMultiXact in PostgreSQL sources.
-                    let pageno = offset / pg_constants::MULTIXACT_MEMBERS_PER_PAGE as u32;
+                    let pageno = ((offset / pg_constants::MULTIXACT_MEMBERS_PER_PAGE as u32) * pg_constants::MAX_REGIONS) + *region;
                     let memberoff = mx_offset_to_member_offset(offset);
                     let flagsoff = mx_offset_to_flags_offset(offset);
                     let bshift = mx_offset_to_flags_bitshift(offset);
