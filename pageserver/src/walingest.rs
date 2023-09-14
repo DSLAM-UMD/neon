@@ -958,7 +958,7 @@ impl<'a> WalIngest<'a> {
             NeonWalRecord::MultixactOffsetCreate {
                 mid: xlrec.mid,
                 moff: xlrec.moff,
-                region: region,
+                region,
             },
         )?;
 
@@ -993,7 +993,7 @@ impl<'a> WalIngest<'a> {
                 NeonWalRecord::MultixactMembersCreate {
                     moff: offset,
                     members: this_page_members,
-                    region: region,
+                    region,
                 },
             )?;
 

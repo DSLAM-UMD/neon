@@ -86,7 +86,7 @@ pub fn mx_offset_to_member_offset(xid: MultiXactId) -> usize {
 }
 
 fn mx_offset_to_member_page(xid: u32, region: u32) -> u32 {
-    ((xid / pg_constants::MULTIXACT_MEMBERS_PER_PAGE as u32) * pg_constants::MAX_REGIONS as u32) + region
+    ((xid / pg_constants::MULTIXACT_MEMBERS_PER_PAGE as u32) * pg_constants::MAX_REGIONS) + region
 }
 
 pub fn mx_offset_to_member_segment(xid: u32, region: u32) -> i32 {
