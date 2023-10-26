@@ -149,7 +149,7 @@ validate_and_apply_xact(PG_FUNCTION_ARGS)
 			pg_qsort(rel->pages, rel->n_pages, sizeof(RWSetPage), page_comparator);
 			validate_index_scan(rel);
 		} 
-		else 
+		else
 		{
 			pg_qsort(rel->tuples, rel->n_tuples, sizeof(RWSetTuple), tuple_comparator);
 			validate_tuple_scan(rel);

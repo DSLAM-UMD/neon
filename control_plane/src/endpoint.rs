@@ -275,6 +275,9 @@ impl Endpoint {
             "remotexact.connstring",
             &format!("postgresql://{}", &self.env.xactserver.listen_pg_addr),
         );
+        conf.append("remotexact.validate_index", "on");
+        conf.append("remotexact.validate_table", "on");
+        conf.append("remotexact.validate_tuple", "on");
         conf.append("current_region", &self.region_id.to_string());
         conf.append("multi_region", "on");
 

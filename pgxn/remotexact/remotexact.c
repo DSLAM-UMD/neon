@@ -29,6 +29,9 @@ void		_PG_init(void);
 
 /* GUCs */
 char	   *remotexact_connstring;
+bool	   remotexact_validate_index;
+bool	   remotexact_validate_table;
+bool	   remotexact_validate_tuple;
 
 typedef struct CollectedRelationKey
 {
@@ -595,9 +598,9 @@ check_for_rollback(StringInfo resp_buf)
 		initStringInfo(&s);
 		appendStringInfo(&s, "%s: %s.", severity, msg);
 		if (detail[0] != '\0')
-			appendStringInfo(&s, "DETAIL:  %s", detail);
+			appendStringInfo(&s, " DETAIL: %s.", detail);
 		if (hint[0] != '\0')
-			appendStringInfo(&s, "HINT:  %s", hint);
+			appendStringInfo(&s, " HINT: %s.", hint);
 
 		PQfreemem(resp_buf->data);
 		ereport(ERROR,
@@ -831,9 +834,33 @@ _PG_init(void)
 							   NULL,
 							   &remotexact_connstring,
 							   "postgresql://127.0.0.1:10000",
-							   PGC_POSTMASTER,
+							   PGC_USERSET,
 							   0,	/* no flags required */
 							   NULL, NULL, NULL);
+	DefineCustomBoolVariable("remotexact.validate_index",
+							 "validate index scan during commit",
+							 NULL,
+							 &remotexact_validate_index,
+							 true,
+							 PGC_USERSET,
+							 0, /* no flags required */
+							 NULL, NULL, NULL);
+	DefineCustomBoolVariable("remotexact.validate_table",
+							 "validate table scan during commit",
+							 NULL,
+							 &remotexact_validate_table,
+							 true,
+							 PGC_USERSET,
+							 0, /* no flags required */
+							 NULL, NULL, NULL);
+	DefineCustomBoolVariable("remotexact.validate_tuple",
+							 "validate tuple scan during commit",
+							 NULL,
+							 &remotexact_validate_tuple,
+							 true,
+							 PGC_USERSET,
+							 0, /* no flags required */
+							 NULL, NULL, NULL);
 
 	if (remotexact_connstring && remotexact_connstring[0])
 	{

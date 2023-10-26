@@ -33,6 +33,9 @@ void validate_index_scan(RWSetRelation *rw_rel)
     Page index_page;
     XLogRecPtr page_lsn = InvalidXLogRecPtr;
 
+    if (!remotexact_validate_index)
+        return;
+
     // This function must only be called for index scans in current_region.
     Assert(rw_rel->region == current_region);
     Assert(rw_rel->is_index && !rw_rel->is_table_scan);
@@ -74,9 +77,11 @@ void validate_index_scan(RWSetRelation *rw_rel)
     if (page_lsn > read_csn) {
         ereport(ERROR,
                 (errcode(ERRCODE_T_R_STATEMENT_COMPLETION_UNKNOWN),
-                 errmsg("[remotexact] read out-of-date index data from a remote partition (relid: %u, blockno: %u)",
+                 errmsg("[remotexact] read out-of-date index (relid: %u, blockno: %u, csn: %X/%X, readcsn: %X/%X)",
                         relid,
-                        rw_rel->pages[i].blkno)));
+                        rw_rel->pages[i].blkno,
+                        LSN_FORMAT_ARGS(page_lsn),
+                        LSN_FORMAT_ARGS(read_csn))));
     }
 }
 
@@ -90,6 +95,9 @@ validate_table_scan(RWSetRelation *rw_rel)
     HeapScanDesc hscan;
 	HeapTuple	htup;
     Snapshot    snapshot = GetActiveSnapshot();
+
+    if (!remotexact_validate_table)
+        return;
 
     // This function must only be called for table scans in current_region.
     Assert(rw_rel->region == current_region);
@@ -107,6 +115,7 @@ validate_table_scan(RWSetRelation *rw_rel)
     {
         HeapTupleHeader tuple = htup->t_data;
         TransactionId checked_xid = InvalidTransactionId;
+        XLogRecPtr tuple_csn = InvalidXLogRecPtr;
 
         /*
          * Must lock the buffer before checking for visibility
@@ -176,11 +185,17 @@ validate_table_scan(RWSetRelation *rw_rel)
          * Translate checked_xid into csn and compare it with csn used for the
          * initial read.
          */
+        tuple_csn = CSNLogGetCSNByXid(current_region, checked_xid);
         if (TransactionIdIsValid(checked_xid) &&
-            CSNLogGetCSNByXid(current_region, checked_xid) > read_csn)
+            tuple_csn > read_csn)
             ereport(ERROR,
                     (errcode(ERRCODE_T_R_STATEMENT_COMPLETION_UNKNOWN),
-                     errmsg("[remotexact] read out-of-date data from a remote partition (relid: %u)", relid)));
+                     errmsg("[remotexact] read out-of-date table (relid: %u, blockno: %u, offset: %u, csn: %X/%X, readcsn: %X/%X)",
+                            relid,
+                            ItemPointerGetBlockNumber(&htup->t_self),
+                            ItemPointerGetOffsetNumber(&htup->t_self),
+                            LSN_FORMAT_ARGS(tuple_csn),
+                            LSN_FORMAT_ARGS(read_csn))));
 
     }
 
@@ -200,6 +215,9 @@ validate_tuple_scan(RWSetRelation *rw_rel)
     Buffer          buf = InvalidBuffer;
     bool            valid = false;
 
+    if (!remotexact_validate_tuple)
+        return;
+
     // This function must only be called for table scans in current_region.
     Assert(rw_rel->region == current_region);
     Assert(!rw_rel->is_table_scan && !rw_rel->is_index);
@@ -208,6 +226,8 @@ validate_tuple_scan(RWSetRelation *rw_rel)
 
     for (i = 0; i < rw_rel->n_tuples; i++)
     {
+        XLogRecPtr tuple_csn = InvalidXLogRecPtr;
+
         htup.t_self = rw_rel->tuples[i].tid;
 
         /* By default, keep_buffer = false to ensure that we don't keep the
@@ -228,20 +248,23 @@ validate_tuple_scan(RWSetRelation *rw_rel)
              * committed at or before the read_csn.
              */
             TransactionId xmin = HeapTupleHeaderGetRawXmin(htup.t_data);
+            tuple_csn = CSNLogGetCSNByXid(current_region, xmin);
             if (TransactionIdIsValid(xmin) &&
-                CSNLogGetCSNByXid(current_region, xmin) > read_csn)
+                tuple_csn > read_csn)
                 valid = false;
 
-            ReleaseBuffer(buf);
+            ReleaseBuffer(buf); 
         }
 
         if (!valid) {
-            int blocknum = ItemPointerGetBlockNumber(&rw_rel->tuples[i].tid);
-            int offset = ItemPointerGetOffsetNumber(&rw_rel->tuples[i].tid);
             ereport(ERROR,
                     (errcode(ERRCODE_T_R_STATEMENT_COMPLETION_UNKNOWN),
-                     errmsg("[remotexact] read out-of-date tuple data from a remote partition (relid: %u, tid: (%u, %u))",
-                            relid, blocknum, offset)));
+                     errmsg("[remotexact] read out-of-date tuple (relid: %u, blockno: %u, offset: %u, csn: %X/%X, readcsn: %X/%X)",
+                            relid,
+                            ItemPointerGetBlockNumber(&rw_rel->tuples[i].tid),
+                            ItemPointerGetOffsetNumber(&rw_rel->tuples[i].tid),
+                            LSN_FORMAT_ARGS(tuple_csn),
+                            LSN_FORMAT_ARGS(read_csn))));
         }
     }
 
