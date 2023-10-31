@@ -26,7 +26,10 @@ use tracing::{debug, error, info, trace, warn, Instrument};
 use super::TaskStateUpdate;
 use crate::{
     context::RequestContext,
-    metrics::{LAST_RECEIVED_LSN, LIVE_CONNECTIONS_COUNT, WALRECEIVER_STARTED_CONNECTIONS, LSN_RECEIVE_DELAY},
+    metrics::{
+        LAST_RECEIVED_LSN, LIVE_CONNECTIONS_COUNT, LSN_RECEIVE_DELAY,
+        WALRECEIVER_STARTED_CONNECTIONS,
+    },
     task_mgr,
     task_mgr::TaskKind,
     task_mgr::WALRECEIVER_RUNTIME,
