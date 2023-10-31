@@ -633,6 +633,8 @@ pub static LIVE_CONNECTIONS_COUNT: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+// Remotexact
+
 pub static LAST_RECEIVED_LSN: Lazy<IntGaugeVec> = Lazy::new(|| {
     register_int_gauge_vec!(
         "pageserver_last_received_lsn",
@@ -647,6 +649,15 @@ pub static LSN_RECEIVE_DELAY: Lazy<HistogramVec> = Lazy::new(|| {
         "pageserver_lsn_receive_delay_seconds",
         "Estiamted delay between sending and receiving a WAL record",
         &["tenant_id", "timeline_id", "timeline_region"],
+        CRITICAL_OP_BUCKETS.into(),
+    )
+    .expect("failed to define a metric")
+});
+
+pub static WAL_COMMIT_WRITER_LOCK_WAIT_TIME: Lazy<Histogram> = Lazy::new(|| {
+    register_histogram!(
+        "pageserver_wal_commit_writer_lock_wait_seconds",
+        "Time spent waiting for the commit writer lock",
         CRITICAL_OP_BUCKETS.into(),
     )
     .expect("failed to define a metric")

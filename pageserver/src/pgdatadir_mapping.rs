@@ -9,6 +9,7 @@
 use super::tenant::{PageReconstructError, Timeline};
 use crate::context::RequestContext;
 use crate::keyspace::{KeySpace, KeySpaceAccum};
+use crate::metrics::WAL_COMMIT_WRITER_LOCK_WAIT_TIME;
 use crate::repository::*;
 use crate::walrecord::NeonWalRecord;
 use anyhow::Context;
@@ -1180,7 +1181,10 @@ impl<'a> DatadirModification<'a> {
     /// All the modifications in this atomic update are stamped by the specified LSN.
     ///
     pub async fn commit(&mut self) -> anyhow::Result<()> {
+        let timer = WAL_COMMIT_WRITER_LOCK_WAIT_TIME.start_timer();
         let writer = self.tline.writer().await;
+        timer.stop_and_record();
+
         let lsn = self.lsn;
         let pending_nblocks = self.pending_nblocks;
         self.pending_nblocks = 0;
