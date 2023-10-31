@@ -8,7 +8,7 @@ use metrics::{
 use once_cell::sync::Lazy;
 use strum::VariantNames;
 use strum_macros::{EnumVariantNames, IntoStaticStr};
-use utils::id::{TenantId, TimelineId};
+use utils::id::{TenantId, TimelineId, RegionId};
 
 /// Prometheus histogram buckets (in seconds) for operations in the critical
 /// path. In other words, operations that directly affect that latency of user
@@ -256,7 +256,7 @@ static LAST_RECORD_LSN: Lazy<IntGaugeVec> = Lazy::new(|| {
     register_int_gauge_vec!(
         "pageserver_last_record_lsn",
         "Last record LSN grouped by timeline",
-        &["tenant_id", "timeline_id"]
+        &["tenant_id", "timeline_id", "timeline_region"]
     )
     .expect("failed to define a metric")
 });
@@ -633,6 +633,25 @@ pub static LIVE_CONNECTIONS_COUNT: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+pub static LAST_RECEIVED_LSN: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "pageserver_last_received_lsn",
+        "Last received LSN grouped by tenant, timeline and region",
+        &["tenant_id", "timeline_id", "timeline_region"]
+    )
+    .expect("failed to define a metric")
+});
+
+pub static LSN_RECEIVE_DELAY: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "pageserver_lsn_receive_delay_seconds",
+        "Estiamted delay between sending and receiving a WAL record",
+        &["tenant_id", "timeline_id", "timeline_region"],
+        CRITICAL_OP_BUCKETS.into(),
+    )
+    .expect("failed to define a metric")
+});
+
 // remote storage metrics
 
 /// NB: increment _after_ recording the current value into [`REMOTE_TIMELINE_CLIENT_CALLS_STARTED_HIST`].
@@ -970,10 +989,12 @@ impl TimelineMetrics {
     pub fn new(
         tenant_id: &TenantId,
         timeline_id: &TimelineId,
+        region_id: &RegionId,
         evictions_with_low_residence_duration_builder: EvictionsWithLowResidenceDurationBuilder,
     ) -> Self {
         let tenant_id = tenant_id.to_string();
         let timeline_id = timeline_id.to_string();
+        let region_id = region_id.to_string();
         let flush_time_histo =
             StorageTimeMetrics::new(StorageTimeOperation::LayerFlush, &tenant_id, &timeline_id);
         let compact_time_histo =
@@ -992,7 +1013,7 @@ impl TimelineMetrics {
         let garbage_collect_histo =
             StorageTimeMetrics::new(StorageTimeOperation::Gc, &tenant_id, &timeline_id);
         let last_record_gauge = LAST_RECORD_LSN
-            .get_metric_with_label_values(&[&tenant_id, &timeline_id])
+            .get_metric_with_label_values(&[&tenant_id, &timeline_id, &region_id])
             .unwrap();
         let resident_physical_size_gauge = RESIDENT_PHYSICAL_SIZE
             .get_metric_with_label_values(&[&tenant_id, &timeline_id])

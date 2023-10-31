@@ -254,7 +254,7 @@ async fn build_timeline_info_common(
     crate::tenant::debug_assert_current_span_has_tenant_and_timeline_id();
     let last_record_lsn = timeline.get_last_record_lsn();
     let (wal_source_connstr, last_received_msg_lsn, last_received_msg_ts) = {
-        let guard = timeline.last_received_wal.lock().unwrap();
+        let guard = timeline.last_received_wal.read().unwrap();
         if let Some(info) = guard.as_ref() {
             (
                 Some(format!("{:?}", info.wal_source_connconf)), // Password is hidden, but it's for statistics only.

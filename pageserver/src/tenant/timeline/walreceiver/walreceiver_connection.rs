@@ -26,7 +26,7 @@ use tracing::{debug, error, info, trace, warn, Instrument};
 use super::TaskStateUpdate;
 use crate::{
     context::RequestContext,
-    metrics::{LIVE_CONNECTIONS_COUNT, WALRECEIVER_STARTED_CONNECTIONS},
+    metrics::{LAST_RECEIVED_LSN, LIVE_CONNECTIONS_COUNT, WALRECEIVER_STARTED_CONNECTIONS, LSN_RECEIVE_DELAY},
     task_mgr,
     task_mgr::TaskKind,
     task_mgr::WALRECEIVER_RUNTIME,
@@ -118,6 +118,16 @@ pub(super) async fn handle_walreceiver_connection(
     debug_assert_current_span_has_tenant_and_timeline_id();
 
     WALRECEIVER_STARTED_CONNECTIONS.inc();
+    let last_received_lsn = LAST_RECEIVED_LSN.with_label_values(&[
+        &timeline.tenant_id.to_string(),
+        &timeline.timeline_id.to_string(),
+        &timeline.region_id.to_string(),
+    ]);
+    let lsn_receive_delay = LSN_RECEIVE_DELAY.with_label_values(&[
+        &timeline.tenant_id.to_string(),
+        &timeline.timeline_id.to_string(),
+        &timeline.region_id.to_string(),
+    ]);
 
     // Connect to the database in replication mode.
     info!("connecting to {wal_source_connconf:?}");
@@ -271,6 +281,10 @@ pub(super) async fn handle_walreceiver_connection(
         // fails (e.g. in walingest), we still want to know latests LSNs from the safekeeper.
         match &replication_message {
             ReplicationMessage::XLogData(xlog_data) => {
+                last_received_lsn.set(xlog_data.wal_end() as i64);
+                if let Ok(duration) = SystemTime::now().duration_since(xlog_data.timestamp()) {
+                    lsn_receive_delay.observe(duration.as_secs_f64());
+                }
                 connection_status.latest_connection_update = now;
                 connection_status.commit_lsn = Some(Lsn::from(xlog_data.wal_end()));
                 connection_status.streaming_lsn = Some(Lsn::from(
@@ -391,7 +405,7 @@ pub(super) async fn handle_walreceiver_connection(
                     .expect("Received message time should be before UNIX EPOCH!")
                     .as_micros(),
             };
-            *timeline.last_received_wal.lock().unwrap() = Some(last_received_wal);
+            *timeline.last_received_wal.write().unwrap() = Some(last_received_wal);
 
             // Send the replication feedback message.
             // Regular standby_status_update fields are put into this message.
