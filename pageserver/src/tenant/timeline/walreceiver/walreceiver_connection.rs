@@ -408,7 +408,7 @@ pub(super) async fn handle_walreceiver_connection(
                     .expect("Received message time should be before UNIX EPOCH!")
                     .as_micros(),
             };
-            *timeline.last_received_wal.write().unwrap() = Some(last_received_wal);
+            *timeline.last_received_wal.lock().unwrap() = Some(last_received_wal);
 
             // Send the replication feedback message.
             // Regular standby_status_update fields are put into this message.

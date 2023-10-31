@@ -275,7 +275,7 @@ pub struct Timeline {
     /// Information about the last processed message by the WAL receiver,
     /// or None if WAL receiver has not received anything for this timeline
     /// yet.
-    pub last_received_wal: RwLock<Option<WalReceiverInfo>>,
+    pub last_received_wal: Mutex<Option<WalReceiverInfo>>,
     pub walreceiver: Mutex<Option<WalReceiver>>,
 
     /// Relation size cache
@@ -1467,7 +1467,7 @@ impl Timeline {
                 partitioning: Mutex::new((KeyPartitioning::new(), Lsn(0))),
                 repartition_threshold: 0,
 
-                last_received_wal: RwLock::new(None),
+                last_received_wal: Mutex::new(None),
                 rel_size_cache: RwLock::new(HashMap::new()),
 
                 download_all_remote_layers_task_info: RwLock::new(None),
