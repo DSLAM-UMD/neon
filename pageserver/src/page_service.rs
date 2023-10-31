@@ -956,21 +956,8 @@ impl PageServerHandler {
         ctx: &RequestContext,
     ) -> anyhow::Result<PagestreamBeMessage> {
         let latest_gc_cutoff_lsn = timeline.get_latest_gc_cutoff_lsn();
-        let lsn = {
-            let last_received_lsn = timeline
-                .last_received_wal
-                .read()
-                .unwrap()
-                .as_ref()
-                .map(|wal| wal.last_received_msg_lsn);
-            if let Some(lsn) = last_received_lsn {
-                lsn
-            } else {
-                // No WAL has been received yet. Fall back to getting the latest processed lsn
-                Self::wait_or_get_last_lsn(timeline, Lsn(0), true, &latest_gc_cutoff_lsn, ctx)
-                    .await?
-            }
-        };
+        let lsn =
+            Self::wait_or_get_last_lsn(timeline, Lsn(0), true, &latest_gc_cutoff_lsn, ctx).await?;
 
         Ok(PagestreamBeMessage::GetLatestLsn(
             PagestreamGetLatestLsnResponse { lsn },
