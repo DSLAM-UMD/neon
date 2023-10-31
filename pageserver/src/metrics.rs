@@ -8,7 +8,7 @@ use metrics::{
 use once_cell::sync::Lazy;
 use strum::VariantNames;
 use strum_macros::{EnumVariantNames, IntoStaticStr};
-use utils::id::{TenantId, TimelineId, RegionId};
+use utils::id::{RegionId, TenantId, TimelineId};
 
 /// Prometheus histogram buckets (in seconds) for operations in the critical
 /// path. In other words, operations that directly affect that latency of user
