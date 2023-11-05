@@ -885,11 +885,21 @@ impl PageServerConf {
             );
         }
 
-        if let Some(batch_ingest) = item.get("batch_ingest") {
-            t_conf.batch_ingest = Some(
-                batch_ingest
-                    .as_bool()
-                    .with_context(|| "configure option batch_ingest is not a bool".to_string())?,
+        if let Some(ingest_commit_batch_size) = item.get("ingest_commit_batch_size") {
+            t_conf.ingest_commit_batch_size = Some(
+                parse_toml_u64("ingest_commit_batch_size", ingest_commit_batch_size)?.try_into()?,
+            );
+        }
+
+        if let Some(ingest_commit_layer_put_batch_size) =
+            item.get("ingest_commit_layer_put_batch_size")
+        {
+            t_conf.ingest_commit_layer_put_batch_size = Some(
+                parse_toml_u64(
+                    "ingest_commit_layer_put_batch_size",
+                    ingest_commit_layer_put_batch_size,
+                )?
+                .try_into()?,
             );
         }
 

@@ -273,11 +273,11 @@ impl InMemoryLayer {
         self.put_value_locked(&mut inner, key, lsn, val).await
     }
 
-    pub async fn put_values(&self, values: Vec<(Key, Lsn, Value)>) -> Result<()> {
+    pub async fn put_values(&self, values: &[(Key, Lsn, Value)]) -> Result<()> {
         let mut inner = self.inner.write().await;
         self.assert_writable();
         for (key, lsn, val) in values {
-            self.put_value_locked(&mut inner, key, lsn, &val).await?;
+            self.put_value_locked(&mut inner, *key, *lsn, val).await?;
         }
         Ok(())
     }
@@ -317,7 +317,7 @@ impl InMemoryLayer {
         Ok(())
     }
 
-    pub async fn put_tombstones(&self, _key_ranges: Vec<(Range<Key>, Lsn)>) -> Result<()> {
+    pub async fn put_tombstones(&self, _key_ranges: &[(Range<Key>, Lsn)]) -> Result<()> {
         Ok(())
     }
 

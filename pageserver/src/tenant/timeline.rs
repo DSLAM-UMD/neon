@@ -1567,9 +1567,9 @@ impl Timeline {
         let max_lsn_wal_lag = tenant_conf_guard
             .max_lsn_wal_lag
             .unwrap_or(self.conf.default_tenant_conf.max_lsn_wal_lag);
-        let batch_ingest = tenant_conf_guard
-            .batch_ingest
-            .unwrap_or(self.conf.default_tenant_conf.batch_ingest);
+        let ingest_commit_batch_size = tenant_conf_guard
+            .ingest_commit_batch_size
+            .unwrap_or(self.conf.default_tenant_conf.ingest_commit_batch_size);
         drop(tenant_conf_guard);
 
         let mut guard = self.walreceiver.lock().unwrap();
@@ -1585,7 +1585,7 @@ impl Timeline {
                 max_lsn_wal_lag,
                 auth_token: crate::config::SAFEKEEPER_AUTH_TOKEN.get().cloned(),
                 availability_zone: self.conf.availability_zone.clone(),
-                batch_ingest,
+                ingest_commit_batch_size,
             },
             broker_client,
             ctx,
@@ -2668,10 +2668,24 @@ impl Timeline {
         Ok(())
     }
 
-    async fn put_values(&self, values: Vec<(Key, Lsn, Value)>) -> anyhow::Result<()> {
+    async fn put_values(&self, values: &[(Key, Lsn, Value)]) -> anyhow::Result<()> {
         if let Some((_, lsn, _)) = values.first() {
             let layer = self.get_layer_for_write(*lsn).await?;
-            layer.put_values(values).await?;
+
+            let batch_size = self
+                .tenant_conf
+                .read()
+                .unwrap()
+                .ingest_commit_layer_put_batch_size
+                .unwrap_or(
+                    self.conf
+                        .default_tenant_conf
+                        .ingest_commit_layer_put_batch_size,
+                );
+
+            for chunk in values.chunks(batch_size.get() as usize) {
+                layer.put_values(chunk).await?;
+            }
         }
         Ok(())
     }
@@ -2682,7 +2696,7 @@ impl Timeline {
         Ok(())
     }
 
-    async fn put_tombstones(&self, tombstones: Vec<(Range<Key>, Lsn)>) -> anyhow::Result<()> {
+    async fn put_tombstones(&self, tombstones: &[(Range<Key>, Lsn)]) -> anyhow::Result<()> {
         if let Some((_, lsn)) = tombstones.first() {
             let layer = self.get_layer_for_write(*lsn).await?;
             layer.put_tombstones(tombstones).await?;
@@ -4805,7 +4819,7 @@ impl<'a> TimelineWriter<'a> {
         self.tl.put_value(key, lsn, value).await
     }
 
-    pub async fn put_batch(&self, batch: Vec<(Key, Lsn, Value)>) -> anyhow::Result<()> {
+    pub async fn put_batch(&self, batch: &[(Key, Lsn, Value)]) -> anyhow::Result<()> {
         self.tl.put_values(batch).await
     }
 
@@ -4813,7 +4827,7 @@ impl<'a> TimelineWriter<'a> {
         self.tl.put_tombstone(key_range, lsn).await
     }
 
-    pub async fn delete_batch(&self, batch: Vec<(Range<Key>, Lsn)>) -> anyhow::Result<()> {
+    pub async fn delete_batch(&self, batch: &[(Range<Key>, Lsn)]) -> anyhow::Result<()> {
         self.tl.put_tombstones(batch).await
     }
 

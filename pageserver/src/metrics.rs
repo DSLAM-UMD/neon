@@ -654,15 +654,6 @@ pub static LSN_RECEIVE_DELAY: Lazy<HistogramVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-pub static WAL_COMMIT_WRITER_LOCK_WAIT_TIME: Lazy<Histogram> = Lazy::new(|| {
-    register_histogram!(
-        "pageserver_wal_commit_writer_lock_wait_seconds",
-        "Time spent waiting for the commit writer lock",
-        CRITICAL_OP_BUCKETS.into(),
-    )
-    .expect("failed to define a metric")
-});
-
 // remote storage metrics
 
 /// NB: increment _after_ recording the current value into [`REMOTE_TIMELINE_CLIENT_CALLS_STARTED_HIST`].

@@ -9,7 +9,6 @@
 use super::tenant::{PageReconstructError, Timeline};
 use crate::context::RequestContext;
 use crate::keyspace::{KeySpace, KeySpaceAccum};
-use crate::metrics::WAL_COMMIT_WRITER_LOCK_WAIT_TIME;
 use crate::repository::*;
 use crate::walrecord::NeonWalRecord;
 use anyhow::{ensure, Context};
@@ -1207,9 +1206,7 @@ impl<'a> DatadirModification<'a> {
     /// All the modifications in this atomic update are stamped by the specified LSN.
     ///
     pub async fn commit(&mut self) -> anyhow::Result<()> {
-        let timer = WAL_COMMIT_WRITER_LOCK_WAIT_TIME.start_timer();
         let writer = self.tline.writer().await;
-        timer.stop_and_record();
 
         let lsn = self.lsn;
         let pending_nblocks = self.pending_nblocks;
@@ -1225,10 +1222,10 @@ impl<'a> DatadirModification<'a> {
                     .collect::<Vec<_>>()
             })
             .concat();
-        writer.put_batch(pending_updates).await?;
+        writer.put_batch(&pending_updates).await?;
 
-        let pending_deletions = self.pending_deletions.drain(..).collect();
-        writer.delete_batch(pending_deletions).await?;
+        let pending_deletions: Vec<_> = self.pending_deletions.drain(..).collect();
+        writer.delete_batch(&pending_deletions).await?;
 
         writer.finish_write(lsn);
 

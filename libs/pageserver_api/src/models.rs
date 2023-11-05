@@ -232,7 +232,8 @@ pub struct TenantConfig {
     pub min_resident_size_override: Option<u64>,
     pub evictions_low_residence_duration_metric_threshold: Option<String>,
     pub gc_feedback: Option<bool>,
-    pub batch_ingest: Option<bool>,
+    pub ingest_commit_batch_size: Option<NonZeroU64>,
+    pub ingest_commit_layer_put_batch_size: Option<NonZeroU64>,
 }
 
 #[serde_as]
@@ -292,7 +293,8 @@ impl TenantConfigRequest {
             min_resident_size_override: None,
             evictions_low_residence_duration_metric_threshold: None,
             gc_feedback: None,
-            batch_ingest: None,
+            ingest_commit_batch_size: None,
+            ingest_commit_layer_put_batch_size: None,
         };
         TenantConfigRequest { tenant_id, config }
     }

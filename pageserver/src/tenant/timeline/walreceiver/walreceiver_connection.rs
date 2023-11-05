@@ -2,6 +2,7 @@
 
 use std::{
     error::Error,
+    num::NonZeroU64,
     pin::pin,
     str::FromStr,
     sync::Arc,
@@ -118,7 +119,7 @@ pub(super) async fn handle_walreceiver_connection(
     connect_timeout: Duration,
     ctx: RequestContext,
     node: NodeId,
-    batch_ingest: bool,
+    ingest_commit_batch_size: NonZeroU64,
 ) -> Result<(), WalReceiverError> {
     debug_assert_current_span_has_tenant_and_timeline_id();
 
@@ -325,6 +326,7 @@ pub(super) async fn handle_walreceiver_connection(
                 {
                     let mut decoded = DecodedWALRecord::default();
                     let mut modification = timeline.begin_modification(startlsn);
+                    let mut uncommitted_records = 0;
                     while let Some((lsn, recdata)) = waldecoder.poll_decode()? {
                         // It is important to deal with the aligned records as lsn in getPage@LSN is
                         // aligned and can be several bytes bigger. Without this alignment we are
@@ -340,7 +342,7 @@ pub(super) async fn handle_walreceiver_connection(
                                 &mut modification,
                                 &mut decoded,
                                 &ctx,
-                                !batch_ingest,
+                                false,
                             )
                             .await
                             .with_context(|| format!("could not ingest record at {lsn}"))?;
@@ -348,9 +350,17 @@ pub(super) async fn handle_walreceiver_connection(
                         fail_point!("walreceiver-after-ingest");
 
                         last_rec_lsn = lsn;
+
+                        uncommitted_records += 1;
+                        if uncommitted_records >= ingest_commit_batch_size.get() {
+                            trace!("batch commit {} ingested WAL records", uncommitted_records);
+                            modification.commit().await?;
+                            uncommitted_records = 0;
+                        }
                     }
-                    if batch_ingest {
-                        trace!("batch commit ingested WAL up to {}", last_rec_lsn);
+
+                    if uncommitted_records > 0 {
+                        trace!("batch commit {} ingested WAL records", uncommitted_records);
                         modification.commit().await?;
                     }
                 }
