@@ -90,7 +90,7 @@ impl<'a> WalIngest<'a> {
         ctx: &RequestContext,
         commit: bool,
     ) -> anyhow::Result<()> {
-        modification.lsn = lsn;
+        modification.set_lsn(lsn)?;
         decode_wal_record(recdata, decoded, self.timeline.pg_version)?;
 
         let mut buf = decoded.record.clone();
@@ -513,7 +513,9 @@ impl<'a> WalIngest<'a> {
             // replaying it would fail to find the previous image of the page, because
             // it doesn't exist. So check if the VM page(s) exist, and skip the WAL
             // record if it doesn't.
-            let vm_size = self.get_relsize(vm_rel, modification.lsn, ctx).await?;
+            let vm_size = self
+                .get_relsize(vm_rel, modification.get_lsn(), ctx)
+                .await?;
             if let Some(blknum) = new_vm_blk {
                 if blknum >= vm_size {
                     new_vm_blk = None;
@@ -711,7 +713,7 @@ impl<'a> WalIngest<'a> {
                 modification.put_rel_page_image(rel, fsm_physical_page_no, ZERO_PAGE.clone())?;
                 fsm_physical_page_no += 1;
             }
-            let nblocks = self.get_relsize(rel, modification.lsn, ctx).await?;
+            let nblocks = self.get_relsize(rel, modification.get_lsn(), ctx).await?;
             if nblocks > fsm_physical_page_no {
                 // check if something to do: FSM is larger than truncate position
                 self.put_rel_truncation(modification, rel, fsm_physical_page_no, ctx)
@@ -733,7 +735,7 @@ impl<'a> WalIngest<'a> {
                 modification.put_rel_page_image(rel, vm_page_no, ZERO_PAGE.clone())?;
                 vm_page_no += 1;
             }
-            let nblocks = self.get_relsize(rel, modification.lsn, ctx).await?;
+            let nblocks = self.get_relsize(rel, modification.get_lsn(), ctx).await?;
             if nblocks > vm_page_no {
                 // check if something to do: VM is larger than truncate position
                 self.put_rel_truncation(modification, rel, vm_page_no, ctx)
@@ -806,7 +808,7 @@ impl<'a> WalIngest<'a> {
         let mut csn_segno = csn_pageno / pg_constants::SLRU_PAGES_PER_SEGMENT;
         let mut csn_rpageno = csn_pageno % pg_constants::SLRU_PAGES_PER_SEGMENT;
         let mut csn_page_xids: Vec<TransactionId> = vec![parsed.xid];
-        let lsn: XidCSN = modification.lsn.0;
+        let lsn: XidCSN = modification.get_lsn().0;
 
         for subxact in &parsed.subxacts {
             let csn_subxact_pageno = ((subxact / pg_constants::CSN_LOG_XACTS_PER_PAGE)
@@ -1212,7 +1214,7 @@ impl<'a> WalIngest<'a> {
         // Check if the relation exists. We implicitly create relations on first
         // record.
         // TODO: would be nice if to be more explicit about it
-        let last_lsn = modification.lsn;
+        let last_lsn = modification.get_lsn();
         let old_nblocks = if !self
             .timeline
             .get_rel_exists(rel, last_lsn, true, ctx)

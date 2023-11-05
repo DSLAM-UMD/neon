@@ -117,6 +117,7 @@ pub(super) async fn handle_walreceiver_connection(
     connect_timeout: Duration,
     ctx: RequestContext,
     node: NodeId,
+    batch_ingest: bool,
 ) -> Result<(), WalReceiverError> {
     debug_assert_current_span_has_tenant_and_timeline_id();
 
@@ -322,7 +323,7 @@ pub(super) async fn handle_walreceiver_connection(
 
                 {
                     let mut decoded = DecodedWALRecord::default();
-                    let mut modification = timeline.begin_modification(endlsn);
+                    let mut modification = timeline.begin_modification(startlsn);
                     while let Some((lsn, recdata)) = waldecoder.poll_decode()? {
                         // It is important to deal with the aligned records as lsn in getPage@LSN is
                         // aligned and can be several bytes bigger. Without this alignment we are
@@ -338,7 +339,7 @@ pub(super) async fn handle_walreceiver_connection(
                                 &mut modification,
                                 &mut decoded,
                                 &ctx,
-                                false,
+                                !batch_ingest,
                             )
                             .await
                             .with_context(|| format!("could not ingest record at {lsn}"))?;
@@ -347,8 +348,10 @@ pub(super) async fn handle_walreceiver_connection(
 
                         last_rec_lsn = lsn;
                     }
-
-                    modification.commit().await?;
+                    if batch_ingest {
+                        trace!("batch commit ingested WAL up to {}", last_rec_lsn);
+                        modification.commit().await?;
+                    }
                 }
 
                 if !caught_up && endlsn >= end_of_wal {

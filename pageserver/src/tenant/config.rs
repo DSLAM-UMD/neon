@@ -100,6 +100,7 @@ pub struct TenantConf {
     #[serde(with = "humantime_serde")]
     pub evictions_low_residence_duration_metric_threshold: Duration,
     pub gc_feedback: bool,
+    pub batch_ingest: bool,
 }
 
 /// Same as TenantConf, but this struct preserves the information about
@@ -180,6 +181,10 @@ pub struct TenantConfOpt {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub gc_feedback: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub batch_ingest: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +253,7 @@ impl TenantConfOpt {
                 .evictions_low_residence_duration_metric_threshold
                 .unwrap_or(global_conf.evictions_low_residence_duration_metric_threshold),
             gc_feedback: self.gc_feedback.unwrap_or(global_conf.gc_feedback),
+            batch_ingest: self.batch_ingest.unwrap_or(global_conf.batch_ingest),
         }
     }
 }
@@ -285,6 +291,7 @@ impl Default for TenantConf {
             )
             .expect("cannot parse default evictions_low_residence_duration_metric_threshold"),
             gc_feedback: false,
+            batch_ingest: true,
         }
     }
 }
@@ -380,6 +387,8 @@ impl TryFrom<&'_ models::TenantConfig> for TenantConfOpt {
             );
         }
         tenant_conf.gc_feedback = request_data.gc_feedback;
+
+        tenant_conf.batch_ingest = request_data.batch_ingest;
 
         Ok(tenant_conf)
     }

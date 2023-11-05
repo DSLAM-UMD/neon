@@ -114,6 +114,7 @@ pub mod defaults {
 #min_resident_size_override = .. # in bytes
 #evictions_low_residence_duration_metric_threshold = '{DEFAULT_EVICTIONS_LOW_RESIDENCE_DURATION_METRIC_THRESHOLD}'
 #gc_feedback = false
+#batch_ingest = true
 
 [remote_storage]
 
@@ -881,6 +882,14 @@ impl PageServerConf {
                 gc_feedback
                     .as_bool()
                     .with_context(|| "configure option gc_feedback is not a bool".to_string())?,
+            );
+        }
+
+        if let Some(batch_ingest) = item.get("batch_ingest") {
+            t_conf.batch_ingest = Some(
+                batch_ingest
+                    .as_bool()
+                    .with_context(|| "configure option batch_ingest is not a bool".to_string())?,
             );
         }
 

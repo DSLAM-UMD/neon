@@ -12,8 +12,9 @@ use crate::keyspace::{KeySpace, KeySpaceAccum};
 use crate::metrics::WAL_COMMIT_WRITER_LOCK_WAIT_TIME;
 use crate::repository::*;
 use crate::walrecord::NeonWalRecord;
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use bytes::{Buf, Bytes};
+use itertools::Itertools;
 use pageserver_api::reltag::{RelTag, SlruKind};
 use postgres_ffi::relfile_utils::{FSM_FORKNUM, VISIBILITYMAP_FORKNUM};
 use postgres_ffi::BLCKSZ;
@@ -673,17 +674,34 @@ pub struct DatadirModification<'a> {
     pub tline: &'a Timeline,
 
     /// Lsn assigned by begin_modification
-    pub lsn: Lsn,
+    lsn: Lsn,
 
     // The modifications are not applied directly to the underlying key-value store.
     // The put-functions add the modifications here, and they are flushed to the
     // underlying key-value store by the 'finish' function.
-    pending_updates: HashMap<Key, (Lsn, Value)>,
+    pending_updates: HashMap<Key, Vec<(Lsn, Value)>>,
     pending_deletions: Vec<(Range<Key>, Lsn)>,
     pending_nblocks: i64,
 }
 
 impl<'a> DatadirModification<'a> {
+    /// Get the current lsn
+    pub fn get_lsn(&self) -> Lsn {
+        self.lsn
+    }
+
+    /// Set the current lsn
+    pub fn set_lsn(&mut self, lsn: Lsn) -> anyhow::Result<()> {
+        ensure!(
+            lsn >= self.lsn,
+            "setting an older lsn {} than {} is not allowed",
+            lsn,
+            self.lsn
+        );
+        self.lsn = lsn;
+        Ok(())
+    }
+
     /// Initialize a completely new repository.
     ///
     /// This inserts the directory metadata entries that are assumed to
@@ -1155,16 +1173,24 @@ impl<'a> DatadirModification<'a> {
         let writer = self.tline.writer().await;
 
         // Flush relation and  SLRU data blocks, keep metadata.
-        let mut retained_pending_updates = HashMap::new();
-        for (key, (lsn, value)) in self.pending_updates.drain() {
-            if is_rel_block_key(key) || is_slru_block_key(key) {
-                // This bails out on first error without modifying pending_updates.
-                // That's Ok, cf this function's doc comment.
-                writer.put(key, lsn, &value).await?;
-            } else {
-                retained_pending_updates.insert(key, (lsn, value));
+        let mut retained_pending_updates: HashMap<_, Vec<_>> = HashMap::new();
+        for (key, values) in self.pending_updates.drain() {
+            for (lsn, value) in values {
+                if is_rel_block_key(key) || is_slru_block_key(key) {
+                    // This bails out on first error without modifying pending_updates.
+                    // That's Ok, cf this function's doc comment.
+                    writer.put(key, lsn, &value).await?;
+                } else {
+                    retained_pending_updates
+                        .entry(key)
+                        .or_default()
+                        .push((lsn, value));
+                }
             }
         }
+        // The right way to extend this is to also merge the values in the corresponding
+        // keys, but since pending_updates is guaranteed to be empty after the drain, this
+        // should also be fine.
         self.pending_updates.extend(retained_pending_updates);
 
         if pending_nblocks != 0 {
@@ -1192,8 +1218,13 @@ impl<'a> DatadirModification<'a> {
         let pending_updates = self
             .pending_updates
             .drain()
-            .map(|(key, (lsn, value))| (key, lsn, value))
-            .collect();
+            .map(|(key, pending_updates)| {
+                pending_updates
+                    .into_iter()
+                    .map(|(lsn, value)| (key, lsn, value))
+                    .collect::<Vec<_>>()
+            })
+            .concat();
         writer.put_batch(pending_updates).await?;
 
         let pending_deletions = self.pending_deletions.drain(..).collect();
@@ -1216,27 +1247,36 @@ impl<'a> DatadirModification<'a> {
         //
         // Note: we don't check pending_deletions. It is an error to request a
         // value that has been removed, deletion only avoids leaking storage.
-        if let Some((_, value)) = self.pending_updates.get(&key) {
-            if let Value::Image(img) = value {
-                Ok(img.clone())
-            } else {
-                // Currently, we never need to read back a WAL record that we
-                // inserted in the same "transaction". All the metadata updates
-                // work directly with Images, and we never need to read actual
-                // data pages. We could handle this if we had to, by calling
-                // the walredo manager, but let's keep it simple for now.
-                Err(PageReconstructError::from(anyhow::anyhow!(
-                    "unexpected pending WAL record"
-                )))
+        if let Some(values) = self.pending_updates.get(&key) {
+            if let Some((_, value)) = values.last() {
+                return if let Value::Image(img) = value {
+                    Ok(img.clone())
+                } else {
+                    // Currently, we never need to read back a WAL record that we
+                    // inserted in the same "transaction". All the metadata updates
+                    // work directly with Images, and we never need to read actual
+                    // data pages. We could handle this if we had to, by calling
+                    // the walredo manager, but let's keep it simple for now.
+                    Err(PageReconstructError::from(anyhow::anyhow!(
+                        "unexpected pending WAL record"
+                    )))
+                };
             }
-        } else {
-            let lsn = Lsn::max(self.tline.get_last_record_lsn(), self.lsn);
-            self.tline.get(key, lsn, ctx).await
         }
+        let lsn = Lsn::max(self.tline.get_last_record_lsn(), self.lsn);
+        self.tline.get(key, lsn, ctx).await
     }
 
     fn put(&mut self, key: Key, val: Value) {
-        self.pending_updates.insert(key, (self.lsn, val));
+        let values = self.pending_updates.entry(key).or_default();
+        // Replace the previous value if it exists at the same lsn
+        if let Some((last_lsn, last_value)) = values.last_mut() {
+            if *last_lsn == self.lsn {
+                *last_value = val;
+                return;
+            }
+        }
+        values.push((self.lsn, val));
     }
 
     fn delete(&mut self, key_range: Range<Key>) {

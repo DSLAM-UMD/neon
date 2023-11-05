@@ -57,6 +57,7 @@ pub struct WalReceiverConf {
     pub max_lsn_wal_lag: NonZeroU64,
     pub auth_token: Option<Arc<String>>,
     pub availability_zone: Option<String>,
+    pub batch_ingest: bool,
 }
 
 pub struct WalReceiver {
