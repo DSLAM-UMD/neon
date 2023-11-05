@@ -4202,6 +4202,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_bulk_insert_with_batch() -> anyhow::Result<()> {
+        let (tenant, ctx) = TenantHarness::create("test_bulk_insert_with_batch")?
+            .load()
+            .await;
+        let tline = tenant
+            .create_test_timeline(
+                TIMELINE_ID,
+                Lsn(0x08),
+                DEFAULT_PG_VERSION,
+                RegionId(0),
+                &ctx,
+            )
+            .await?;
+
+        let mut lsn = Lsn(0x10);
+
+        let mut keyspace = KeySpaceAccum::new();
+
+        let mut test_key = Key::from_hex("012222222233333333444444445500000000").unwrap();
+        let mut blknum = 0;
+        for _ in 0..50 {
+            let mut batch = vec![];
+
+            for _ in 0..10000 {
+                test_key.field6 = blknum;
+
+                batch.push((
+                    test_key,
+                    lsn,
+                    Value::Image(TEST_IMG(&format!("{} at {}", blknum, lsn))),
+                ));
+
+                keyspace.add_key(test_key);
+                lsn = Lsn(lsn.0 + 0x10);
+                blknum += 1;
+            }
+
+            let last_lsn = batch.last().unwrap().1;
+
+            let writer = tline.writer().await;
+            writer
+                .put_batch(batch.iter().map(|(k, l, v)| (*k, *l, v)).collect())
+                .await?;
+            writer.finish_write(last_lsn);
+            drop(writer);
+
+            let cutoff = tline.get_last_record_lsn();
+
+            tline
+                .update_gc_info(Vec::new(), cutoff, Duration::ZERO, &ctx)
+                .await?;
+            tline.freeze_and_flush().await?;
+            tline.compact(&CancellationToken::new(), &ctx).await?;
+            tline.gc().await?;
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_random_updates() -> anyhow::Result<()> {
         let (tenant, ctx) = TenantHarness::create("test_random_updates")?.load().await;
         let tline = tenant

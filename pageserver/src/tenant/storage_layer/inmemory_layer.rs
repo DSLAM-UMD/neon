@@ -28,7 +28,7 @@ use utils::{
 // while being able to use std::fmt::Write's methods
 use std::fmt::Write as _;
 use std::ops::Range;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, RwLockWriteGuard};
 
 use super::{DeltaLayer, DeltaLayerWriter, Layer};
 
@@ -268,21 +268,40 @@ impl InMemoryLayer {
     /// Common subroutine of the public put_wal_record() and put_page_image() functions.
     /// Adds the page version to the in-memory tree
     pub async fn put_value(&self, key: Key, lsn: Lsn, val: &Value) -> Result<()> {
-        trace!("put_value key {} at {}/{}", key, self.timeline_id, lsn);
         let mut inner = self.inner.write().await;
         self.assert_writable();
+        self.put_value_locked(&mut inner, key, lsn, val).await
+    }
+
+    pub async fn put_values(&self, values: Vec<(Key, Lsn, &Value)>) -> Result<()> {
+        let mut inner = self.inner.write().await;
+        self.assert_writable();
+        for (key, lsn, val) in values {
+            self.put_value_locked(&mut inner, key, lsn, val).await?;
+        }
+        Ok(())
+    }
+
+    async fn put_value_locked(
+        &self,
+        locked_inner: &mut RwLockWriteGuard<'_, InMemoryLayerInner>,
+        key: Key,
+        lsn: Lsn,
+        val: &Value,
+    ) -> Result<()> {
+        trace!("put_value key {} at {}/{}", key, self.timeline_id, lsn);
 
         let off = {
             SER_BUFFER.with(|x| -> Result<_> {
                 let mut buf = x.borrow_mut();
                 buf.clear();
                 val.ser_into(&mut (*buf))?;
-                let off = inner.file.write_blob(&buf)?;
+                let off = locked_inner.file.write_blob(&buf)?;
                 Ok(off)
             })?
         };
 
-        let vec_map = inner.index.entry(key).or_default();
+        let vec_map = locked_inner.index.entry(key).or_default();
         let old = vec_map.append_or_update_last(lsn, off).unwrap().0;
         if old.is_some() {
             // We already had an entry for this LSN. That's odd..
@@ -295,6 +314,10 @@ impl InMemoryLayer {
     pub async fn put_tombstone(&self, _key_range: Range<Key>, _lsn: Lsn) -> Result<()> {
         // TODO: Currently, we just leak the storage for any deleted keys
 
+        Ok(())
+    }
+
+    pub async fn put_tombstones(&self, _key_ranges: Vec<(Range<Key>, Lsn)>) -> Result<()> {
         Ok(())
     }
 
