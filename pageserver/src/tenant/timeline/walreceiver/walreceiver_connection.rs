@@ -109,6 +109,7 @@ impl From<WalDecodeError> for WalReceiverError {
 
 /// Open a connection to the given safekeeper and receive WAL, sending back progress
 /// messages as we go.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_walreceiver_connection(
     timeline: Arc<Timeline>,
     wal_source_connconf: PgConnectionConfig,

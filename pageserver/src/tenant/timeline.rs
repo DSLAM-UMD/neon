@@ -2669,7 +2669,7 @@ impl Timeline {
     }
 
     async fn put_values(&self, values: Vec<(Key, Lsn, Value)>) -> anyhow::Result<()> {
-        if let Some((_, lsn, _)) = values.iter().next() {
+        if let Some((_, lsn, _)) = values.first() {
             let layer = self.get_layer_for_write(*lsn).await?;
             layer.put_values(values).await?;
         }
@@ -2683,7 +2683,7 @@ impl Timeline {
     }
 
     async fn put_tombstones(&self, tombstones: Vec<(Range<Key>, Lsn)>) -> anyhow::Result<()> {
-        if let Some((_, lsn)) = tombstones.iter().next() {
+        if let Some((_, lsn)) = tombstones.first() {
             let layer = self.get_layer_for_write(*lsn).await?;
             layer.put_tombstones(tombstones).await?;
         }
