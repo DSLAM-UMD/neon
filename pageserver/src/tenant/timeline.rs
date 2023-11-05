@@ -2664,7 +2664,7 @@ impl Timeline {
         Ok(())
     }
 
-    async fn put_values(&self, values: Vec<(Key, Lsn, &Value)>) -> anyhow::Result<()> {
+    async fn put_values(&self, values: Vec<(Key, Lsn, Value)>) -> anyhow::Result<()> {
         if let Some((_, lsn, _)) = values.iter().next() {
             let layer = self.get_layer_for_write(*lsn).await?;
             layer.put_values(values).await?;
@@ -4801,7 +4801,7 @@ impl<'a> TimelineWriter<'a> {
         self.tl.put_value(key, lsn, value).await
     }
 
-    pub async fn put_batch(&self, batch: Vec<(Key, Lsn, &Value)>) -> anyhow::Result<()> {
+    pub async fn put_batch(&self, batch: Vec<(Key, Lsn, Value)>) -> anyhow::Result<()> {
         self.tl.put_values(batch).await
     }
 

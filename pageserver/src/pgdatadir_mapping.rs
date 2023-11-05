@@ -678,8 +678,8 @@ pub struct DatadirModification<'a> {
     // The modifications are not applied directly to the underlying key-value store.
     // The put-functions add the modifications here, and they are flushed to the
     // underlying key-value store by the 'finish' function.
-    pending_updates: HashMap<Key, Value>,
-    pending_deletions: Vec<Range<Key>>,
+    pending_updates: HashMap<Key, (Lsn, Value)>,
+    pending_deletions: Vec<(Range<Key>, Lsn)>,
     pending_nblocks: i64,
 }
 
@@ -1156,13 +1156,13 @@ impl<'a> DatadirModification<'a> {
 
         // Flush relation and  SLRU data blocks, keep metadata.
         let mut retained_pending_updates = HashMap::new();
-        for (key, value) in self.pending_updates.drain() {
+        for (key, (lsn, value)) in self.pending_updates.drain() {
             if is_rel_block_key(key) || is_slru_block_key(key) {
                 // This bails out on first error without modifying pending_updates.
                 // That's Ok, cf this function's doc comment.
-                writer.put(key, self.lsn, &value).await?;
+                writer.put(key, lsn, &value).await?;
             } else {
-                retained_pending_updates.insert(key, value);
+                retained_pending_updates.insert(key, (lsn, value));
             }
         }
         self.pending_updates.extend(retained_pending_updates);
@@ -1189,12 +1189,15 @@ impl<'a> DatadirModification<'a> {
         let pending_nblocks = self.pending_nblocks;
         self.pending_nblocks = 0;
 
-        for (key, value) in self.pending_updates.drain() {
-            writer.put(key, lsn, &value).await?;
-        }
-        for key_range in self.pending_deletions.drain(..) {
-            writer.delete(key_range, lsn).await?;
-        }
+        let pending_updates = self
+            .pending_updates
+            .drain()
+            .map(|(key, (lsn, value))| (key, lsn, value))
+            .collect();
+        writer.put_batch(pending_updates).await?;
+
+        let pending_deletions = self.pending_deletions.drain(..).collect();
+        writer.delete_batch(pending_deletions).await?;
 
         writer.finish_write(lsn);
 
@@ -1213,7 +1216,7 @@ impl<'a> DatadirModification<'a> {
         //
         // Note: we don't check pending_deletions. It is an error to request a
         // value that has been removed, deletion only avoids leaking storage.
-        if let Some(value) = self.pending_updates.get(&key) {
+        if let Some((_, value)) = self.pending_updates.get(&key) {
             if let Value::Image(img) = value {
                 Ok(img.clone())
             } else {
@@ -1233,12 +1236,12 @@ impl<'a> DatadirModification<'a> {
     }
 
     fn put(&mut self, key: Key, val: Value) {
-        self.pending_updates.insert(key, val);
+        self.pending_updates.insert(key, (self.lsn, val));
     }
 
     fn delete(&mut self, key_range: Range<Key>) {
         trace!("DELETE {}-{}", key_range.start, key_range.end);
-        self.pending_deletions.push(key_range);
+        self.pending_deletions.push((key_range, self.lsn));
     }
 }
 

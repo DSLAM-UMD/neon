@@ -88,6 +88,7 @@ impl<'a> WalIngest<'a> {
         modification: &mut DatadirModification<'_>,
         decoded: &mut DecodedWALRecord,
         ctx: &RequestContext,
+        commit: bool,
     ) -> anyhow::Result<()> {
         modification.lsn = lsn;
         decode_wal_record(recdata, decoded, self.timeline.pg_version)?;
@@ -358,7 +359,9 @@ impl<'a> WalIngest<'a> {
 
         // Now that this record has been fully handled, including updating the
         // checkpoint data, let the repository know that it is up-to-date to this LSN
-        modification.commit().await?;
+        if commit {
+            modification.commit().await?;
+        }
 
         Ok(())
     }

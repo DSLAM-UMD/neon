@@ -4242,9 +4242,7 @@ mod tests {
             let last_lsn = batch.last().unwrap().1;
 
             let writer = tline.writer().await;
-            writer
-                .put_batch(batch.iter().map(|(k, l, v)| (*k, *l, v)).collect())
-                .await?;
+            writer.put_batch(batch).await?;
             writer.finish_write(last_lsn);
             drop(writer);
 

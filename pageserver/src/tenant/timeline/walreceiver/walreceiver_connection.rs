@@ -332,7 +332,14 @@ pub(super) async fn handle_walreceiver_connection(
                         }
 
                         walingest
-                            .ingest_record(recdata, lsn, &mut modification, &mut decoded, &ctx)
+                            .ingest_record(
+                                recdata,
+                                lsn,
+                                &mut modification,
+                                &mut decoded,
+                                &ctx,
+                                false,
+                            )
                             .await
                             .with_context(|| format!("could not ingest record at {lsn}"))?;
 
@@ -340,6 +347,8 @@ pub(super) async fn handle_walreceiver_connection(
 
                         last_rec_lsn = lsn;
                     }
+
+                    modification.commit().await?;
                 }
 
                 if !caught_up && endlsn >= end_of_wal {
