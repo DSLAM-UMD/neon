@@ -27,10 +27,7 @@ use tracing::{debug, error, info, trace, warn, Instrument};
 use super::TaskStateUpdate;
 use crate::{
     context::RequestContext,
-    metrics::{
-        LAST_RECEIVED_LSN, LIVE_CONNECTIONS_COUNT, LSN_RECEIVE_DELAY,
-        WALRECEIVER_STARTED_CONNECTIONS,
-    },
+    metrics::{LIVE_CONNECTIONS_COUNT, WALRECEIVER_STARTED_CONNECTIONS},
     task_mgr,
     task_mgr::TaskKind,
     task_mgr::WALRECEIVER_RUNTIME,
@@ -124,16 +121,6 @@ pub(super) async fn handle_walreceiver_connection(
     debug_assert_current_span_has_tenant_and_timeline_id();
 
     WALRECEIVER_STARTED_CONNECTIONS.inc();
-    let last_received_lsn = LAST_RECEIVED_LSN.with_label_values(&[
-        &timeline.tenant_id.to_string(),
-        &timeline.timeline_id.to_string(),
-        &timeline.region_id.to_string(),
-    ]);
-    let lsn_receive_delay = LSN_RECEIVE_DELAY.with_label_values(&[
-        &timeline.tenant_id.to_string(),
-        &timeline.timeline_id.to_string(),
-        &timeline.region_id.to_string(),
-    ]);
 
     // Connect to the database in replication mode.
     info!("connecting to {wal_source_connconf:?}");
@@ -287,10 +274,18 @@ pub(super) async fn handle_walreceiver_connection(
         // fails (e.g. in walingest), we still want to know latests LSNs from the safekeeper.
         match &replication_message {
             ReplicationMessage::XLogData(xlog_data) => {
-                last_received_lsn.set(xlog_data.wal_end() as i64);
+                timeline
+                    .metrics
+                    .last_receive_gauge
+                    .set(xlog_data.wal_end() as i64);
+
                 if let Ok(duration) = SystemTime::now().duration_since(xlog_data.timestamp()) {
-                    lsn_receive_delay.observe(duration.as_secs_f64());
+                    timeline
+                        .metrics
+                        .wal_receive_time
+                        .observe(duration.as_secs_f64());
                 }
+
                 connection_status.latest_connection_update = now;
                 connection_status.commit_lsn = Some(Lsn::from(xlog_data.wal_end()));
                 connection_status.streaming_lsn = Some(Lsn::from(
@@ -327,6 +322,7 @@ pub(super) async fn handle_walreceiver_connection(
                     let mut decoded = DecodedWALRecord::default();
                     let mut modification = timeline.begin_modification(startlsn);
                     let mut uncommitted_records = 0;
+                    let mut num_records = 0;
                     while let Some((lsn, recdata)) = waldecoder.poll_decode()? {
                         // It is important to deal with the aligned records as lsn in getPage@LSN is
                         // aligned and can be several bytes bigger. Without this alignment we are
@@ -357,12 +353,19 @@ pub(super) async fn handle_walreceiver_connection(
                             modification.commit().await?;
                             uncommitted_records = 0;
                         }
+
+                        num_records += 1;
                     }
 
                     if uncommitted_records > 0 {
                         trace!("batch commit {} ingested WAL records", uncommitted_records);
                         modification.commit().await?;
                     }
+
+                    timeline
+                        .metrics
+                        .wal_replication_msg_records
+                        .observe(num_records as f64);
                 }
 
                 if !caught_up && endlsn >= end_of_wal {

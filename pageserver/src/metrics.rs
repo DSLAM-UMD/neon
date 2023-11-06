@@ -261,6 +261,35 @@ static LAST_RECORD_LSN: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+static LAST_RECEIVE_LSN: Lazy<IntGaugeVec> = Lazy::new(|| {
+    register_int_gauge_vec!(
+        "pageserver_last_receive_lsn",
+        "Last received LSN grouped by timeline",
+        &["tenant_id", "timeline_id", "timeline_region"]
+    )
+    .expect("failed to define a metric")
+});
+
+static WAL_RECEIVE_TIME: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "pageserver_wal_receive_time_seconds",
+        "Estimated delay between sending and receiving a WAL record",
+        &["tenant_id", "timeline_id", "timeline_region"],
+        CRITICAL_OP_BUCKETS.into(),
+    )
+    .expect("failed to define a metric")
+});
+
+static WAL_REPLICATION_MSG_RECORDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "pageserver_wal_replication_msg_records_total",
+        "Number of records in a WAL replication message",
+        &["tenant_id", "timeline_id", "timeline_region"],
+        vec![1.0, 10.0, 50.0, 100.0, 200.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0],
+    )
+    .expect("failed to define a metric")
+});
+
 static RESIDENT_PHYSICAL_SIZE: Lazy<UIntGaugeVec> = Lazy::new(|| {
     register_uint_gauge_vec!(
         "pageserver_resident_physical_size",
@@ -633,27 +662,6 @@ pub static LIVE_CONNECTIONS_COUNT: Lazy<IntGaugeVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
-// Remotexact
-
-pub static LAST_RECEIVED_LSN: Lazy<IntGaugeVec> = Lazy::new(|| {
-    register_int_gauge_vec!(
-        "pageserver_last_received_lsn",
-        "Last received LSN grouped by tenant, timeline and region",
-        &["tenant_id", "timeline_id", "timeline_region"]
-    )
-    .expect("failed to define a metric")
-});
-
-pub static LSN_RECEIVE_DELAY: Lazy<HistogramVec> = Lazy::new(|| {
-    register_histogram_vec!(
-        "pageserver_lsn_receive_delay_seconds",
-        "Estiamted delay between sending and receiving a WAL record",
-        &["tenant_id", "timeline_id", "timeline_region"],
-        CRITICAL_OP_BUCKETS.into(),
-    )
-    .expect("failed to define a metric")
-});
-
 // remote storage metrics
 
 /// NB: increment _after_ recording the current value into [`REMOTE_TIMELINE_CLIENT_CALLS_STARTED_HIST`].
@@ -978,6 +986,9 @@ pub struct TimelineMetrics {
     pub load_layer_map_histo: StorageTimeMetrics,
     pub garbage_collect_histo: StorageTimeMetrics,
     pub last_record_gauge: IntGauge,
+    pub last_receive_gauge: IntGauge,
+    pub wal_receive_time: Histogram,
+    pub wal_replication_msg_records: Histogram,
     pub resident_physical_size_gauge: UIntGauge,
     /// copy of LayeredTimeline.current_logical_size
     pub current_logical_size_gauge: UIntGauge,
@@ -1017,6 +1028,15 @@ impl TimelineMetrics {
         let last_record_gauge = LAST_RECORD_LSN
             .get_metric_with_label_values(&[&tenant_id, &timeline_id, &region_id])
             .unwrap();
+        let last_receive_gauge = LAST_RECEIVE_LSN
+            .get_metric_with_label_values(&[&tenant_id, &timeline_id, &region_id])
+            .unwrap();
+        let wal_receive_time = WAL_RECEIVE_TIME
+            .get_metric_with_label_values(&[&tenant_id, &timeline_id, &region_id])
+            .unwrap();
+        let wal_replication_msg_records = WAL_REPLICATION_MSG_RECORDS
+            .get_metric_with_label_values(&[&tenant_id, &timeline_id, &region_id])
+            .unwrap();
         let resident_physical_size_gauge = RESIDENT_PHYSICAL_SIZE
             .get_metric_with_label_values(&[&tenant_id, &timeline_id])
             .unwrap();
@@ -1046,6 +1066,9 @@ impl TimelineMetrics {
             garbage_collect_histo,
             load_layer_map_histo,
             last_record_gauge,
+            last_receive_gauge,
+            wal_receive_time,
+            wal_replication_msg_records,
             resident_physical_size_gauge,
             current_logical_size_gauge,
             num_persistent_files_created,
