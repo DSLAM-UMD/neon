@@ -43,8 +43,8 @@ pub mod defaults {
     pub const DEFAULT_MAX_WALRECEIVER_LSN_WAL_LAG: u64 = 10 * 1024 * 1024;
     pub const DEFAULT_EVICTIONS_LOW_RESIDENCE_DURATION_METRIC_THRESHOLD: &str = "24 hour";
 
-    pub const DEFAULT_INGEST_COMMIT_BATCH_SIZE: u64 = 1000;
-    pub const DEFAULT_INGEST_COMMIT_LAYER_PUT_BATCH_SIZE: u64 = 1000;
+    pub const DEFAULT_INGEST_COMMIT_BATCH_SIZE: u64 = 1;
+    pub const DEFAULT_INGEST_COMMIT_LAYER_PUT_BATCH_SIZE: u64 = 1;
 }
 
 /// Per-tenant configuration options
