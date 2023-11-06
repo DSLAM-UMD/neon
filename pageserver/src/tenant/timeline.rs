@@ -56,7 +56,7 @@ use crate::config::PageServerConf;
 use crate::keyspace::{KeyPartitioning, KeySpace, KeySpaceRandomAccum};
 use crate::metrics::{
     TimelineMetrics, MATERIALIZED_PAGE_CACHE_HIT, MATERIALIZED_PAGE_CACHE_HIT_DIRECT,
-    RECONSTRUCT_TIME, UNEXPECTED_ONDEMAND_DOWNLOADS,
+    RECONSTRUCT_TIME, UMD_DEBUG, UNEXPECTED_ONDEMAND_DOWNLOADS,
 };
 use crate::pgdatadir_mapping::LsnForTimestamp;
 use crate::pgdatadir_mapping::{is_rel_fsm_block_key, is_rel_vm_block_key};
@@ -2653,7 +2653,17 @@ impl Timeline {
     /// Get a handle to the latest layer for appending.
     ///
     async fn get_layer_for_write(&self, lsn: Lsn) -> anyhow::Result<Arc<InMemoryLayer>> {
+        let timer = UMD_DEBUG
+            .with_label_values(&[
+                &self.tenant_id.to_string(),
+                &self.timeline_id.to_string(),
+                &self.region_id.to_string(),
+                "get_layer_for_write_lock",
+            ])
+            .start_timer();
         let mut guard = self.layers.write().await;
+        timer.stop_and_record();
+
         let layer = guard.get_layer_for_write(
             lsn,
             self.get_last_record_lsn(),
@@ -2666,8 +2676,32 @@ impl Timeline {
 
     async fn put_value(&self, key: Key, lsn: Lsn, val: &Value) -> anyhow::Result<()> {
         //info!("PUT: key {} at {}", key, lsn);
-        let layer = self.get_layer_for_write(lsn).await?;
-        layer.put_value(key, lsn, val).await?;
+        let layer = {
+            let _timer = UMD_DEBUG
+                .with_label_values(&[
+                    &self.tenant_id.to_string(),
+                    &self.timeline_id.to_string(),
+                    &self.region_id.to_string(),
+                    "put_value:get_layer_for_write",
+                ])
+                .start_timer();
+
+            self.get_layer_for_write(lsn).await?
+        };
+
+        {
+            let _timer = UMD_DEBUG
+                .with_label_values(&[
+                    &self.tenant_id.to_string(),
+                    &self.timeline_id.to_string(),
+                    &self.region_id.to_string(),
+                    "put_value",
+                ])
+                .start_timer();
+
+            layer.put_value(key, lsn, val).await?;
+        }
+
         Ok(())
     }
 
@@ -2675,7 +2709,17 @@ impl Timeline {
         // Pick the first LSN in the batch to get the layer to write to.
         for lsns in values.values() {
             if let Some((lsn, _)) = lsns.first() {
-                let layer = self.get_layer_for_write(*lsn).await?;
+                let layer = {
+                    let _timer = UMD_DEBUG
+                        .with_label_values(&[
+                            &self.tenant_id.to_string(),
+                            &self.timeline_id.to_string(),
+                            &self.region_id.to_string(),
+                            "put_values:get_layer_for_write",
+                        ])
+                        .start_timer();
+                    self.get_layer_for_write(*lsn).await?
+                };
                 layer.put_values(values).await?;
                 break;
             }

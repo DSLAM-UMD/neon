@@ -26,7 +26,7 @@ use tracing::{debug, error, info, trace, warn, Instrument};
 use super::TaskStateUpdate;
 use crate::{
     context::RequestContext,
-    metrics::{LIVE_CONNECTIONS_COUNT, WALRECEIVER_STARTED_CONNECTIONS},
+    metrics::{LIVE_CONNECTIONS_COUNT, UMD_DEBUG, WALRECEIVER_STARTED_CONNECTIONS},
     task_mgr,
     task_mgr::TaskKind,
     task_mgr::WALRECEIVER_RUNTIME,
@@ -319,6 +319,14 @@ pub(super) async fn handle_walreceiver_connection(
 
                 {
                     let mut decoded = DecodedWALRecord::default();
+                    let poll_decode_loop_timer = UMD_DEBUG
+                        .with_label_values(&[
+                            &timeline.tenant_id.to_string(),
+                            &timeline.timeline_id.to_string(),
+                            &timeline.region_id.to_string(),
+                            "poll_decode_loop",
+                        ])
+                        .start_timer();
                     let mut modification = timeline.begin_modification(startlsn);
                     let mut uncommitted_records = 0;
                     let mut num_records = 0;
@@ -330,11 +338,20 @@ pub(super) async fn handle_walreceiver_connection(
                             return Err(WalReceiverError::Other(anyhow!("LSN not aligned")));
                         }
 
-                        // Ingest the records without immediately committing them.
-                        walingest
-                            .ingest_record(recdata, lsn, &mut modification, &mut decoded, &ctx)
-                            .await
-                            .with_context(|| format!("could not ingest record at {lsn}"))?;
+                        {
+                            let _timer = UMD_DEBUG
+                                .with_label_values(&[
+                                    &timeline.tenant_id.to_string(),
+                                    &timeline.timeline_id.to_string(),
+                                    &timeline.region_id.to_string(),
+                                    "ingest_record",
+                                ])
+                                .start_timer();
+                            walingest
+                                .ingest_record(recdata, lsn, &mut modification, &mut decoded, &ctx)
+                                .await
+                                .with_context(|| format!("could not ingest record at {lsn}"))?;
+                        }
 
                         fail_point!("walreceiver-after-ingest");
 
@@ -343,15 +360,36 @@ pub(super) async fn handle_walreceiver_connection(
                         uncommitted_records += 1;
                         // Commit every ingest_batch_size records.
                         if uncommitted_records >= ingest_batch_size {
+                            let _timer = UMD_DEBUG
+                                .with_label_values(&[
+                                    &timeline.tenant_id.to_string(),
+                                    &timeline.timeline_id.to_string(),
+                                    &timeline.region_id.to_string(),
+                                    "ingest_record_commit_inner",
+                                ])
+                                .start_timer();
+
+                            trace!("batch commit {} ingested WAL records", uncommitted_records);
                             modification.commit().await?;
                             uncommitted_records = 0;
                         }
 
                         num_records += 1;
                     }
+                    poll_decode_loop_timer.stop_and_record();
 
                     // Commit the remaining records.
                     if uncommitted_records > 0 {
+                        let _timer = UMD_DEBUG
+                            .with_label_values(&[
+                                &timeline.tenant_id.to_string(),
+                                &timeline.timeline_id.to_string(),
+                                &timeline.region_id.to_string(),
+                                "ingest_record_commit_outer",
+                            ])
+                            .start_timer();
+
+                        trace!("batch commit {} ingested WAL records", uncommitted_records);
                         modification.commit().await?;
                     }
 
@@ -395,15 +433,25 @@ pub(super) async fn handle_walreceiver_connection(
             }
         }
 
-        timeline
-            .check_checkpoint_distance()
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to check checkpoint distance for timeline {}",
-                    timeline.timeline_id
-                )
-            })?;
+        {
+            // let _timer = UMD_WAL_DEBUG
+            //     .with_label_values(&[
+            //         &timeline.tenant_id.to_string(),
+            //         &timeline.timeline_id.to_string(),
+            //         &timeline.region_id.to_string(),
+            //         "check_checkpoint_distance",
+            //     ])
+            //     .start_timer();
+            timeline
+                .check_checkpoint_distance()
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to check checkpoint distance for timeline {}",
+                        timeline.timeline_id
+                    )
+                })?;
+        }
 
         if let Some(last_lsn) = status_update {
             let timeline_remote_consistent_lsn =
@@ -446,10 +494,20 @@ pub(super) async fn handle_walreceiver_connection(
 
             let mut data = BytesMut::new();
             status_update.serialize(&mut data);
-            physical_stream
-                .as_mut()
-                .zenith_status_update(data.len() as u64, &data)
-                .await?;
+            {
+                // let _timer = UMD_WAL_DEBUG
+                //     .with_label_values(&[
+                //         &timeline.tenant_id.to_string(),
+                //         &timeline.timeline_id.to_string(),
+                //         &timeline.region_id.to_string(),
+                //         "status_update",
+                //     ])
+                //     .start_timer();
+                physical_stream
+                    .as_mut()
+                    .zenith_status_update(data.len() as u64, &data)
+                    .await?;
+            }
         }
     }
 
