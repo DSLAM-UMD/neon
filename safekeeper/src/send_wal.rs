@@ -2,6 +2,7 @@
 //! with the "START_REPLICATION" message, and registry of walsenders.
 
 use crate::handler::SafekeeperPostgresHandler;
+use crate::metrics::{SEND_WAL_BYTES, SEND_WAL_TIME};
 use crate::safekeeper::Term;
 use crate::timeline::Timeline;
 use crate::wal_service::ConnectionId;
@@ -504,6 +505,20 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> WalSender<'_, IO> {
     /// Err(CopyStreamHandlerEnd) is always returned; Result is used only for ?
     /// convenience.
     async fn run(&mut self) -> Result<(), CopyStreamHandlerEnd> {
+        let tenant_id = self.tli.ttid.tenant_id;
+        let timeline_id = self.tli.ttid.timeline_id;
+        let peer_addr = self.pgb.get_peer_addr();
+        let send_wal_bytes = SEND_WAL_BYTES.with_label_values(&[
+            &tenant_id.to_string(),
+            &timeline_id.to_string(),
+            &peer_addr.to_string(),
+        ]);
+        let send_wal_time = SEND_WAL_TIME.with_label_values(&[
+            &tenant_id.to_string(),
+            &timeline_id.to_string(),
+            &peer_addr.to_string(),
+        ]);
+
         loop {
             // If we are streaming to walproposer, check it is time to stop.
             if let Some(stop_pos) = self.stop_pos {
@@ -543,15 +558,20 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> WalSender<'_, IO> {
             };
             let send_buf = &send_buf[..send_size];
 
+            send_wal_bytes.observe(send_size as f64);
+
             // and send it
-            self.pgb
-                .write_message(&BeMessage::XLogData(XLogDataBody {
-                    wal_start: self.start_pos.0,
-                    wal_end: self.end_pos.0,
-                    timestamp: get_current_timestamp(),
-                    data: send_buf,
-                }))
-                .await?;
+            {
+                let _timer = send_wal_time.start_timer();
+                self.pgb
+                    .write_message(&BeMessage::XLogData(XLogDataBody {
+                        wal_start: self.start_pos.0,
+                        wal_end: self.end_pos.0,
+                        timestamp: get_current_timestamp(),
+                        data: send_buf,
+                    }))
+                    .await?;
+            }
 
             trace!(
                 "sent {} bytes of WAL {}-{}",
