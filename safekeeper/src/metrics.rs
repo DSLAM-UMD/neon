@@ -725,11 +725,11 @@ pub static SEND_WAL_BYTES: Lazy<HistogramVec> = Lazy::new(|| {
     .expect("Failed to register safekeeper_send_wal_bytes histogram")
 });
 
-pub static SEND_WAL_TIME: Lazy<HistogramVec> = Lazy::new(|| {
+pub static DEBUG: Lazy<HistogramVec> = Lazy::new(|| {
     register_histogram_vec!(
-        "safekeeper_send_wal_time_seconds",
-        "Time to send a WAL message",
-        &["tenant_id", "timeline_id", "peer_addr"],
+        "safekeeper_debug_seconds",
+        "For debugging",
+        &["tenant_id", "timeline_id", "peer_addr", "name"],
         vec![
             0.000_001, 0.000_010, 0.000_100, // 1 us, 10 us, 100 us
             0.001_000, 0.010_000, 0.100_000, // 1 ms, 10 ms, 100 ms
