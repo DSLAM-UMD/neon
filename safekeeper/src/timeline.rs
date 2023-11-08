@@ -540,7 +540,12 @@ impl Timeline {
         let commit_lsn: Lsn;
         {
             let timer = DEBUG
-                .with_label_values(&["process_msg_lock_wait_time"])
+                .with_label_values(&[
+                    &self.ttid.tenant_id.to_string(),
+                    &self.ttid.timeline_id.to_string(),
+                    "",
+                    "process_msg_lock_wait_time",
+                ])
                 .start_timer();
             let mut shared_state = self.write_shared_state().await;
             timer.stop_and_record();
