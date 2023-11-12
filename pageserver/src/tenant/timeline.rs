@@ -531,6 +531,7 @@ impl Timeline {
             .get_layers_lock_duration_histogram(UmdLayersLockType::ReadWait, "layer_size_sum")
             .start_timer();
         let guard = self.layers.read().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(UmdLayersLockType::ReadAcquired, "layer_size_sum")
             .start_timer();
@@ -901,6 +902,7 @@ impl Timeline {
                 )
                 .start_timer();
             let guard = self.layers.read().await;
+            _timer.stop_and_record();
             let _timer = self
                 .get_layers_lock_duration_histogram(
                     UmdLayersLockType::ReadAcquired,
@@ -1042,6 +1044,7 @@ impl Timeline {
             .get_layers_lock_duration_histogram(UmdLayersLockType::ReadWait, "layer_map_info")
             .start_timer();
         let guard = self.layers.read().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(UmdLayersLockType::ReadAcquired, "layer_map_info")
             .start_timer();
@@ -1176,6 +1179,7 @@ impl Timeline {
             .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "evict_layer_batch")
             .start_timer();
         let mut guard = self.layers.write().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(
                 UmdLayersLockType::WriteAcquired,
@@ -1658,6 +1662,7 @@ impl Timeline {
         let mut layers = self.layers.try_write().expect(
             "in the context where we call this function, no other task has access to the object",
         );
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(
                 UmdLayersLockType::WriteAcquired,
@@ -1675,6 +1680,7 @@ impl Timeline {
             .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "load_layer_map")
             .start_timer();
         let mut guard = self.layers.write().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(UmdLayersLockType::WriteAcquired, "load_layer_map")
             .start_timer();
@@ -1814,6 +1820,7 @@ impl Timeline {
         // method is only called during init so it's fine.
         let mut guard = self.layers.write().await;
 
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(
                 UmdLayersLockType::WriteAcquired,
@@ -1976,6 +1983,7 @@ impl Timeline {
                 )
                 .start_timer();
             let guard = self.layers.read().await;
+            _timer.stop_and_record();
             let _timer = self
                 .get_layers_lock_duration_histogram(
                     UmdLayersLockType::ReadAcquired,
@@ -2372,6 +2380,7 @@ impl Timeline {
             .get_layers_lock_duration_histogram(UmdLayersLockType::ReadWait, "find_layer")
             .start_timer();
         let guard = self.layers.read().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(UmdLayersLockType::ReadAcquired, "find_layer")
             .start_timer();
@@ -2566,6 +2575,7 @@ impl Timeline {
                         )
                         .start_timer();
                     let guard = timeline.layers.read().await;
+                    _timer.stop_and_record();
                     let _timer = self
                         .get_layers_lock_duration_histogram(
                             UmdLayersLockType::ReadAcquired,
@@ -2769,6 +2779,7 @@ impl Timeline {
             .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "get_layer_for_write")
             .start_timer();
         let mut guard = self.layers.write().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(
                 UmdLayersLockType::WriteAcquired,
@@ -2872,6 +2883,7 @@ impl Timeline {
             .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "freeze_inmem_layer")
             .start_timer();
         let mut guard = self.layers.write().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(
                 UmdLayersLockType::WriteAcquired,
@@ -2911,6 +2923,7 @@ impl Timeline {
                         )
                         .start_timer();
                     let guard = self.layers.read().await;
+                    _timer.stop_and_record();
                     let _timer = self
                         .get_layers_lock_duration_histogram(
                             UmdLayersLockType::ReadAcquired,
@@ -3057,6 +3070,7 @@ impl Timeline {
                 )
                 .start_timer();
             let mut guard = self.layers.write().await;
+            _timer.stop_and_record();
             let _timer = self
                 .get_layers_lock_duration_histogram(
                     UmdLayersLockType::WriteAcquired,
@@ -3268,6 +3282,7 @@ impl Timeline {
             )
             .start_timer();
         let guard = self.layers.read().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(
                 UmdLayersLockType::ReadAcquired,
@@ -3456,6 +3471,7 @@ impl Timeline {
             .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "create_image_layers")
             .start_timer();
         let mut guard = self.layers.write().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(
                 UmdLayersLockType::WriteAcquired,
@@ -4113,6 +4129,7 @@ impl Timeline {
             .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "compact_level0")
             .start_timer();
         let mut guard = self.layers.write().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(UmdLayersLockType::WriteAcquired, "compact_level0")
             .start_timer();
@@ -4408,6 +4425,7 @@ impl Timeline {
             .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "gc_timeline")
             .start_timer();
         let mut guard: tokio::sync::RwLockWriteGuard<'_, LayerManager> = self.layers.write().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(UmdLayersLockType::WriteAcquired, "gc_timeline")
             .start_timer();
@@ -4846,6 +4864,7 @@ impl Timeline {
                 )
                 .start_timer();
             let guard = self.layers.read().await;
+            _timer.stop_and_record();
             let _timer = self
                 .get_layers_lock_duration_histogram(
                     UmdLayersLockType::ReadAcquired,
@@ -4964,6 +4983,7 @@ impl Timeline {
             )
             .start_timer();
         let guard = self.layers.read().await;
+        _timer.stop_and_record();
         let _timer = self
             .get_layers_lock_duration_histogram(
                 UmdLayersLockType::ReadAcquired,
