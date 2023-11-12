@@ -31,7 +31,6 @@ use bytes::{Buf, Bytes, BytesMut};
 use tracing::*;
 
 use crate::context::RequestContext;
-use crate::metrics::UMD_DEBUG;
 use crate::pgdatadir_mapping::*;
 use crate::tenant::PageReconstructError;
 use crate::tenant::Timeline;
@@ -105,15 +104,6 @@ impl WalIngest {
         if decoded.xl_rmid == pg_constants::RM_HEAP_ID
             || decoded.xl_rmid == pg_constants::RM_HEAP2_ID
         {
-            let _timer = UMD_DEBUG
-                .with_label_values(&[
-                    &modification.tline.tenant_id.to_string(),
-                    &modification.tline.timeline_id.to_string(),
-                    &modification.tline.region_id.to_string(),
-                    "ingest_heapam_record",
-                ])
-                .start_timer();
-
             self.ingest_heapam_record(&mut buf, modification, decoded, ctx)
                 .await?;
         }
@@ -122,15 +112,6 @@ impl WalIngest {
             && (decoded.xl_info & pg_constants::XLR_RMGR_INFO_MASK)
                 == pg_constants::XLOG_SMGR_CREATE
         {
-            let _timer = UMD_DEBUG
-                .with_label_values(&[
-                    &modification.tline.tenant_id.to_string(),
-                    &modification.tline.timeline_id.to_string(),
-                    &modification.tline.region_id.to_string(),
-                    "ingest_xlog_smgr_create",
-                ])
-                .start_timer();
-
             let create = XlSmgrCreate::decode(&mut buf);
             self.ingest_xlog_smgr_create(modification, &create, ctx)
                 .await?;
@@ -138,15 +119,6 @@ impl WalIngest {
             && (decoded.xl_info & pg_constants::XLR_RMGR_INFO_MASK)
                 == pg_constants::XLOG_SMGR_TRUNCATE
         {
-            let _timer = UMD_DEBUG
-                .with_label_values(&[
-                    &modification.tline.tenant_id.to_string(),
-                    &modification.tline.timeline_id.to_string(),
-                    &modification.tline.region_id.to_string(),
-                    "ingest_xlog_smgr_truncate",
-                ])
-                .start_timer();
-
             let truncate = XlSmgrTruncate::decode(&mut buf);
             self.ingest_xlog_smgr_truncate(modification, &truncate, ctx)
                 .await?;
@@ -202,15 +174,6 @@ impl WalIngest {
         } else if decoded.xl_rmid == pg_constants::RM_TBLSPC_ID {
             trace!("XLOG_TBLSPC_CREATE/DROP is not handled yet");
         } else if decoded.xl_rmid == pg_constants::RM_CLOG_ID {
-            let _timer = UMD_DEBUG
-                .with_label_values(&[
-                    &modification.tline.tenant_id.to_string(),
-                    &modification.tline.timeline_id.to_string(),
-                    &modification.tline.region_id.to_string(),
-                    "ingest_clog_truncate_record",
-                ])
-                .start_timer();
-
             let info = decoded.xl_info & !pg_constants::XLR_INFO_MASK;
             if info == pg_constants::CLOG_ZEROPAGE {
                 let pageno = buf.get_u32_le();
@@ -232,15 +195,6 @@ impl WalIngest {
                     .await?;
             }
         } else if decoded.xl_rmid == pg_constants::RM_XACT_ID {
-            let _timer = UMD_DEBUG
-                .with_label_values(&[
-                    &modification.tline.tenant_id.to_string(),
-                    &modification.tline.timeline_id.to_string(),
-                    &modification.tline.region_id.to_string(),
-                    "ingest_xact_record",
-                ])
-                .start_timer();
-
             let info = decoded.xl_info & pg_constants::XLOG_XACT_OPMASK;
             if info == pg_constants::XLOG_XACT_COMMIT || info == pg_constants::XLOG_XACT_ABORT {
                 let parsed_xact =
@@ -280,15 +234,6 @@ impl WalIngest {
                     .await?;
             }
         } else if decoded.xl_rmid == pg_constants::RM_MULTIXACT_ID {
-            let _timer = UMD_DEBUG
-                .with_label_values(&[
-                    &modification.tline.tenant_id.to_string(),
-                    &modification.tline.timeline_id.to_string(),
-                    &modification.tline.region_id.to_string(),
-                    "ingest_multixact",
-                ])
-                .start_timer();
-
             let info = decoded.xl_info & pg_constants::XLR_RMGR_INFO_MASK;
 
             if info == pg_constants::XLOG_MULTIXACT_ZERO_OFF_PAGE {
@@ -326,27 +271,10 @@ impl WalIngest {
                     .await?;
             }
         } else if decoded.xl_rmid == pg_constants::RM_RELMAP_ID {
-            let _timer = UMD_DEBUG
-                .with_label_values(&[
-                    &modification.tline.tenant_id.to_string(),
-                    &modification.tline.timeline_id.to_string(),
-                    &modification.tline.region_id.to_string(),
-                    "ingest_relmap_page",
-                ])
-                .start_timer();
             let xlrec = XlRelmapUpdate::decode(&mut buf);
             self.ingest_relmap_page(modification, &xlrec, decoded, ctx)
                 .await?;
         } else if decoded.xl_rmid == pg_constants::RM_XLOG_ID {
-            let _timer = UMD_DEBUG
-                .with_label_values(&[
-                    &modification.tline.tenant_id.to_string(),
-                    &modification.tline.timeline_id.to_string(),
-                    &modification.tline.region_id.to_string(),
-                    "ingest_xlog_checkpoint",
-                ])
-                .start_timer();
-
             let info = decoded.xl_info & pg_constants::XLR_RMGR_INFO_MASK;
             if info == pg_constants::XLOG_NEXTOID {
                 let next_oid = buf.get_u32_le();
@@ -385,15 +313,6 @@ impl WalIngest {
                 utils::failpoint_sleep_millis_async!("wal-ingest-logical-message-sleep");
             }
         } else if decoded.xl_rmid == pg_constants::RM_CSNLOG_ID {
-            let _timer = UMD_DEBUG
-                .with_label_values(&[
-                    &modification.tline.tenant_id.to_string(),
-                    &modification.tline.timeline_id.to_string(),
-                    &modification.tline.region_id.to_string(),
-                    "ingest_csn",
-                ])
-                .start_timer();
-
             let info = decoded.xl_info & !pg_constants::XLR_INFO_MASK;
             if info == pg_constants::XLOG_CSN_ZEROPAGE {
                 let pageno = buf.get_u32_le();
@@ -418,22 +337,11 @@ impl WalIngest {
             // XLOG records to determine the LSN and thus commit order.
         }
 
-        {
-            let _timer = UMD_DEBUG
-                .with_label_values(&[
-                    &modification.tline.tenant_id.to_string(),
-                    &modification.tline.timeline_id.to_string(),
-                    &modification.tline.region_id.to_string(),
-                    "ingest_decoded_block",
-                ])
-                .start_timer();
-
-            // Iterate through all the blocks that the record modifies, and
-            // "put" a separate copy of the record for each block.
-            for blk in decoded.blocks.iter() {
-                self.ingest_decoded_block(modification, lsn, decoded, blk, ctx)
-                    .await?;
-            }
+        // Iterate through all the blocks that the record modifies, and
+        // "put" a separate copy of the record for each block.
+        for blk in decoded.blocks.iter() {
+            self.ingest_decoded_block(modification, lsn, decoded, blk, ctx)
+                .await?;
         }
 
         // If checkpoint data was updated, store the new version in the repository

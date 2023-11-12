@@ -672,6 +672,29 @@ pub static UMD_DEBUG: Lazy<HistogramVec> = Lazy::new(|| {
     .expect("failed to define a metric")
 });
 
+pub enum UmdLayersLockType {
+    ReadWait,
+    ReadAcquired,
+    WriteWait,
+    WriteAcquired,
+}
+
+pub static UMD_LAYERS_LOCK_TIME: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "pageserver_umd_layers_lock_time",
+        "For debugging layers locking delay",
+        &[
+            "tenant_id",
+            "timeline_id",
+            "timeline_region",
+            "type", // read_wait, read_acquired, write_wait, write_acquired
+            "name"
+        ],
+        CRITICAL_OP_BUCKETS.into(),
+    )
+    .expect("failed to define a metric")
+});
+
 // remote storage metrics
 
 /// NB: increment _after_ recording the current value into [`REMOTE_TIMELINE_CLIENT_CALLS_STARTED_HIST`].

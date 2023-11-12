@@ -26,6 +26,7 @@ use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
 
 use crate::{
     context::{DownloadBehavior, RequestContext},
+    metrics::UmdLayersLockType,
     task_mgr::{self, TaskKind, BACKGROUND_RUNTIME},
     tenant::{
         config::{EvictionPolicy, EvictionPolicyLayerAccessThreshold},
@@ -195,7 +196,19 @@ impl Timeline {
         // We don't want to hold the layer map lock during eviction.
         // So, we just need to deal with this.
         let candidates: Vec<Arc<dyn PersistentLayer>> = {
+            let _timer = self
+                .get_layers_lock_duration_histogram(
+                    UmdLayersLockType::ReadWait,
+                    "eviction_iteration_threshold",
+                )
+                .start_timer();
             let guard = self.layers.read().await;
+            let _timer = self
+                .get_layers_lock_duration_histogram(
+                    UmdLayersLockType::ReadAcquired,
+                    "eviction_iteration_threshold",
+                )
+                .start_timer();
             let layers = guard.layer_map();
             let mut candidates = Vec::new();
             for hist_layer in layers.iter_historic_layers() {
