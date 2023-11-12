@@ -2559,16 +2559,19 @@ impl Timeline {
             #[allow(clippy::never_loop)] // see comment at bottom of this loop
             'layer_map_search: loop {
                 let remote_layer = {
-                    let _timer = self.get_layers_lock_duration_histogram(
-                        UmdLayersLockType::ReadWait,
-                        "get_reconstruct_data",
-                    );
+                    let _timer = self
+                        .get_layers_lock_duration_histogram(
+                            UmdLayersLockType::ReadWait,
+                            "get_reconstruct_data",
+                        )
+                        .start_timer();
                     let guard = timeline.layers.read().await;
-
-                    let _timer = self.get_layers_lock_duration_histogram(
-                        UmdLayersLockType::ReadAcquired,
-                        "get_reconstruct_data",
-                    );
+                    let _timer = self
+                        .get_layers_lock_duration_histogram(
+                            UmdLayersLockType::ReadAcquired,
+                            "get_reconstruct_data",
+                        )
+                        .start_timer();
                     let layers = guard.layer_map();
 
                     // Check the open and frozen in-memory layers first, in order from newest
