@@ -6,6 +6,7 @@
 //!
 use crate::config::PageServerConf;
 use crate::context::RequestContext;
+use crate::metrics::{UmdLayersLockType, UMD_IMMEM_LAYER_LOCK_TIME};
 use crate::repository::{Key, Value};
 use crate::tenant::blob_io::BlobWriter;
 use crate::tenant::block_io::BlockReader;
@@ -13,6 +14,7 @@ use crate::tenant::ephemeral_file::EphemeralFile;
 use crate::tenant::storage_layer::{ValueReconstructResult, ValueReconstructState};
 use crate::walrecord;
 use anyhow::{ensure, Result};
+use metrics::Histogram;
 use pageserver_api::models::InMemoryLayerInfo;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -106,6 +108,20 @@ impl InMemoryLayer {
     fn end_lsn_or_max(&self) -> Lsn {
         self.end_lsn.get().copied().unwrap_or(Lsn::MAX)
     }
+
+    fn get_lock_duration_histogram(&self, typ: UmdLayersLockType, name: &str) -> Histogram {
+        UMD_IMMEM_LAYER_LOCK_TIME.with_label_values(&[
+            &self.tenant_id.to_string(),
+            &self.timeline_id.to_string(),
+            match typ {
+                UmdLayersLockType::ReadWait => "read_wait",
+                UmdLayersLockType::ReadAcquired => "read_acquired",
+                UmdLayersLockType::WriteWait => "write_wait",
+                UmdLayersLockType::WriteAcquired => "write_acquired",
+            },
+            name,
+        ])
+    }
 }
 
 #[async_trait::async_trait]
@@ -125,8 +141,14 @@ impl Layer for InMemoryLayer {
 
     /// debugging function to print out the contents of the layer
     async fn dump(&self, verbose: bool, _ctx: &RequestContext) -> Result<()> {
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::ReadWait, "dump")
+            .start_timer();
         let inner = self.inner.read().await;
-
+        _timer.stop_and_record();
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::ReadAcquired, "dump")
+            .start_timer();
         let end_str = self.end_lsn_or_max();
 
         println!(
@@ -181,7 +203,17 @@ impl Layer for InMemoryLayer {
         ensure!(lsn_range.start >= self.start_lsn);
         let mut need_image = true;
 
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::ReadWait, "get_value_reconstruct_data")
+            .start_timer();
         let inner = self.inner.read().await;
+        _timer.stop_and_record();
+        let _timer = self
+            .get_lock_duration_histogram(
+                UmdLayersLockType::ReadAcquired,
+                "get_value_reconstruct_data",
+            )
+            .start_timer();
 
         let reader = inner.file.block_cursor();
 
@@ -233,7 +265,15 @@ impl InMemoryLayer {
     /// Get layer size on the disk
     ///
     pub async fn size(&self) -> Result<u64> {
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::ReadWait, "size")
+            .start_timer();
         let inner = self.inner.read().await;
+        _timer.stop_and_record();
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::ReadAcquired, "size")
+            .start_timer();
+
         Ok(inner.file.size)
     }
 
@@ -268,13 +308,32 @@ impl InMemoryLayer {
     /// Common subroutine of the public put_wal_record() and put_page_image() functions.
     /// Adds the page version to the in-memory tree
     pub async fn put_value(&self, key: Key, lsn: Lsn, val: &Value) -> Result<()> {
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::WriteWait, "put_value")
+            .start_timer();
+
         let mut inner = self.inner.write().await;
+        _timer.stop_and_record();
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::WriteAcquired, "put_value")
+            .start_timer();
+
         self.assert_writable();
         self.put_value_locked(&mut inner, key, lsn, val).await
     }
 
     pub async fn put_values(&self, values: &HashMap<Key, Vec<(Lsn, Value)>>) -> Result<()> {
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::WriteWait, "put_values")
+            .start_timer();
+
         let mut inner = self.inner.write().await;
+
+        _timer.stop_and_record();
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::WriteAcquired, "put_values")
+            .start_timer();
+
         self.assert_writable();
         for (key, vals) in values {
             for (lsn, val) in vals {
@@ -327,7 +386,14 @@ impl InMemoryLayer {
     /// Records the end_lsn for non-dropped layers.
     /// `end_lsn` is exclusive
     pub async fn freeze(&self, end_lsn: Lsn) {
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::WriteWait, "freeze")
+            .start_timer();
         let inner = self.inner.write().await;
+        _timer.stop_and_record();
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::WriteAcquired, "freeze")
+            .start_timer();
 
         assert!(self.start_lsn < end_lsn);
         self.end_lsn.set(end_lsn).expect("end_lsn set only once");
@@ -352,7 +418,15 @@ impl InMemoryLayer {
         // lock, it will see that it's not writeable anymore and retry, but it
         // would have to wait until we release it. That race condition is very
         // rare though, so we just accept the potential latency hit for now.
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::ReadWait, "write_to_disk")
+            .start_timer();
+
         let inner = self.inner.read().await;
+        _timer.stop_and_record();
+        let _timer = self
+            .get_lock_duration_histogram(UmdLayersLockType::ReadAcquired, "write_to_disk")
+            .start_timer();
 
         let end_lsn = *self.end_lsn.get().unwrap();
 
