@@ -331,6 +331,7 @@ pub(super) async fn handle_walreceiver_connection(
                             return Err(WalReceiverError::Other(anyhow!("LSN not aligned")));
                         }
 
+                        // Ingest the records without immediately committing them.
                         walingest
                             .ingest_record(
                                 recdata,
@@ -348,6 +349,7 @@ pub(super) async fn handle_walreceiver_connection(
                         last_rec_lsn = lsn;
 
                         uncommitted_records += 1;
+                        // Commit every ingest_batch_size records.
                         if uncommitted_records >= ingest_batch_size.get() {
                             modification.commit().await?;
                             uncommitted_records = 0;
@@ -356,6 +358,7 @@ pub(super) async fn handle_walreceiver_connection(
                         num_records += 1;
                     }
 
+                    // Commit the remaining records.
                     if uncommitted_records > 0 {
                         modification.commit().await?;
                     }

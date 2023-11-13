@@ -294,13 +294,13 @@ impl InMemoryLayer {
         trace!("put_value key {} at {}/{}", key, self.timeline_id, lsn);
 
         let off = {
-            SER_BUFFER.with(|x| -> Result<_> {
-                let mut buf = x.borrow_mut();
-                buf.clear();
-                val.ser_into(&mut (*buf))?;
-                let off = locked_inner.file.write_blob(&buf)?;
-                Ok(off)
-            })?
+            // Avoid doing allocations for "small" values.
+            // In the regression test suite, the limit of 256 avoided allocations in 95% of cases:
+            // https://github.com/neondatabase/neon/pull/5056#discussion_r1301975061
+            let mut buf = smallvec::SmallVec::<[u8; 256]>::new();
+            buf.clear();
+            val.ser_into(&mut buf)?;
+            locked_inner.file.write_blob(&buf)?
         };
 
         let vec_map = locked_inner.index.entry(key).or_default();

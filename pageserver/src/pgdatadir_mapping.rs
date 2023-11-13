@@ -1175,7 +1175,7 @@ impl<'a> DatadirModification<'a> {
         let writer = self.tline.writer().await;
 
         // Flush relation and  SLRU data blocks, keep metadata.
-        let mut retained_pending_updates: HashMap<_, Vec<_>> = HashMap::new();
+        let mut retained_pending_updates = HashMap::<_, Vec<_>>::new();
         for (key, values) in self.pending_updates.drain() {
             for (lsn, value) in values {
                 if is_rel_block_key(key) || is_slru_block_key(key) {
@@ -1231,7 +1231,7 @@ impl<'a> DatadirModification<'a> {
     // Internal helper functions to batch the modifications
 
     async fn get(&self, key: Key, ctx: &RequestContext) -> Result<Bytes, PageReconstructError> {
-        // Have we already updated the same key? Read the pending updated
+        // Have we already updated the same key? Read the latest pending updated
         // version in that case.
         //
         // Note: we don't check pending_deletions. It is an error to request a

@@ -54,6 +54,7 @@ use crate::context::{DownloadBehavior, RequestContext};
 use crate::import_datadir::import_wal_from_tar;
 use crate::metrics::{LIVE_CONNECTIONS_COUNT, SMGR_QUERY_TIME};
 use crate::pgdatadir_mapping::Version;
+use crate::task_mgr;
 use crate::task_mgr::TaskKind;
 use crate::tenant;
 use crate::tenant::debug_assert_current_span_has_tenant_and_timeline_id;
