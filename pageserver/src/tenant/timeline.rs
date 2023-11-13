@@ -1567,9 +1567,9 @@ impl Timeline {
         let max_lsn_wal_lag = tenant_conf_guard
             .max_lsn_wal_lag
             .unwrap_or(self.conf.default_tenant_conf.max_lsn_wal_lag);
-        let ingest_commit_batch_size = tenant_conf_guard
-            .ingest_commit_batch_size
-            .unwrap_or(self.conf.default_tenant_conf.ingest_commit_batch_size);
+        let ingest_batch_size = tenant_conf_guard
+            .ingest_batch_size
+            .unwrap_or(self.conf.default_tenant_conf.ingest_batch_size);
         drop(tenant_conf_guard);
 
         let mut guard = self.walreceiver.lock().unwrap();
@@ -1585,7 +1585,7 @@ impl Timeline {
                 max_lsn_wal_lag,
                 auth_token: crate::config::SAFEKEEPER_AUTH_TOKEN.get().cloned(),
                 availability_zone: self.conf.availability_zone.clone(),
-                ingest_commit_batch_size,
+                ingest_batch_size,
             },
             broker_client,
             ctx,
@@ -2671,21 +2671,7 @@ impl Timeline {
     async fn put_values(&self, values: &[(Key, Lsn, Value)]) -> anyhow::Result<()> {
         if let Some((_, lsn, _)) = values.first() {
             let layer = self.get_layer_for_write(*lsn).await?;
-
-            let batch_size = self
-                .tenant_conf
-                .read()
-                .unwrap()
-                .ingest_commit_layer_put_batch_size
-                .unwrap_or(
-                    self.conf
-                        .default_tenant_conf
-                        .ingest_commit_layer_put_batch_size,
-                );
-
-            for chunk in values.chunks(batch_size.get() as usize) {
-                layer.put_values(chunk).await?;
-            }
+            layer.put_values(values).await?;
         }
         Ok(())
     }

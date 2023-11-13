@@ -43,8 +43,7 @@ pub mod defaults {
     pub const DEFAULT_MAX_WALRECEIVER_LSN_WAL_LAG: u64 = 10 * 1024 * 1024;
     pub const DEFAULT_EVICTIONS_LOW_RESIDENCE_DURATION_METRIC_THRESHOLD: &str = "24 hour";
 
-    pub const DEFAULT_INGEST_COMMIT_BATCH_SIZE: u64 = 1;
-    pub const DEFAULT_INGEST_COMMIT_LAYER_PUT_BATCH_SIZE: u64 = 1;
+    pub const DEFAULT_INGEST_BATCH_SIZE: u64 = 100;
 }
 
 /// Per-tenant configuration options
@@ -103,8 +102,7 @@ pub struct TenantConf {
     #[serde(with = "humantime_serde")]
     pub evictions_low_residence_duration_metric_threshold: Duration,
     pub gc_feedback: bool,
-    pub ingest_commit_batch_size: NonZeroU64,
-    pub ingest_commit_layer_put_batch_size: NonZeroU64,
+    pub ingest_batch_size: NonZeroU64,
 }
 
 /// Same as TenantConf, but this struct preserves the information about
@@ -188,11 +186,7 @@ pub struct TenantConfOpt {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
-    pub ingest_commit_batch_size: Option<NonZeroU64>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub ingest_commit_layer_put_batch_size: Option<NonZeroU64>,
+    pub ingest_batch_size: Option<NonZeroU64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,12 +255,9 @@ impl TenantConfOpt {
                 .evictions_low_residence_duration_metric_threshold
                 .unwrap_or(global_conf.evictions_low_residence_duration_metric_threshold),
             gc_feedback: self.gc_feedback.unwrap_or(global_conf.gc_feedback),
-            ingest_commit_batch_size: self
-                .ingest_commit_batch_size
-                .unwrap_or(global_conf.ingest_commit_batch_size),
-            ingest_commit_layer_put_batch_size: self
-                .ingest_commit_layer_put_batch_size
-                .unwrap_or(global_conf.ingest_commit_layer_put_batch_size),
+            ingest_batch_size: self
+                .ingest_batch_size
+                .unwrap_or(global_conf.ingest_batch_size),
         }
     }
 }
@@ -304,12 +295,8 @@ impl Default for TenantConf {
             )
             .expect("cannot parse default evictions_low_residence_duration_metric_threshold"),
             gc_feedback: false,
-            ingest_commit_batch_size: NonZeroU64::new(DEFAULT_INGEST_COMMIT_BATCH_SIZE)
-                .expect("cannot parse default ingest_commit_batch_size"),
-            ingest_commit_layer_put_batch_size: NonZeroU64::new(
-                DEFAULT_INGEST_COMMIT_LAYER_PUT_BATCH_SIZE,
-            )
-            .expect("cannot parse default ingest_commit_layer_put_batch_size"),
+            ingest_batch_size: NonZeroU64::new(DEFAULT_INGEST_BATCH_SIZE)
+                .expect("cannot parse default ingest_batch_size"),
         }
     }
 }
@@ -406,9 +393,7 @@ impl TryFrom<&'_ models::TenantConfig> for TenantConfOpt {
         }
         tenant_conf.gc_feedback = request_data.gc_feedback;
 
-        tenant_conf.ingest_commit_batch_size = request_data.ingest_commit_batch_size;
-        tenant_conf.ingest_commit_layer_put_batch_size =
-            request_data.ingest_commit_layer_put_batch_size;
+        tenant_conf.ingest_batch_size = request_data.ingest_batch_size;
 
         Ok(tenant_conf)
     }

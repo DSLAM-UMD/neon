@@ -116,7 +116,7 @@ pub(super) async fn handle_walreceiver_connection(
     connect_timeout: Duration,
     ctx: RequestContext,
     node: NodeId,
-    ingest_commit_batch_size: NonZeroU64,
+    ingest_batch_size: NonZeroU64,
 ) -> Result<(), WalReceiverError> {
     debug_assert_current_span_has_tenant_and_timeline_id();
 
@@ -348,8 +348,7 @@ pub(super) async fn handle_walreceiver_connection(
                         last_rec_lsn = lsn;
 
                         uncommitted_records += 1;
-                        if uncommitted_records >= ingest_commit_batch_size.get() {
-                            trace!("batch commit {} ingested WAL records", uncommitted_records);
+                        if uncommitted_records >= ingest_batch_size.get() {
                             modification.commit().await?;
                             uncommitted_records = 0;
                         }
@@ -358,7 +357,6 @@ pub(super) async fn handle_walreceiver_connection(
                     }
 
                     if uncommitted_records > 0 {
-                        trace!("batch commit {} ingested WAL records", uncommitted_records);
                         modification.commit().await?;
                     }
 

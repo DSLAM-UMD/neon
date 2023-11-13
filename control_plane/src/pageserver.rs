@@ -380,16 +380,11 @@ impl PageServerNode {
                 .map(|x| x.parse::<bool>())
                 .transpose()
                 .context("Failed to parse 'gc_feedback' as bool")?,
-            ingest_commit_batch_size: settings
-                .remove("ingest_commit_batch_size")
+            ingest_batch_size: settings
+                .remove("ingest_batch_size")
                 .map(|x| x.parse::<NonZeroU64>())
                 .transpose()
-                .context("Failed to parse 'ingest_commit_batch_size' as integer")?,
-            ingest_commit_layer_put_batch_size: settings
-                .remove("ingest_commit_layer_put_batch_size")
-                .map(|x| x.parse::<NonZeroU64>())
-                .transpose()
-                .context("Failed to parse 'ingest_commit_layer_put_batch_size' as integer")?,
+                .context("Failed to parse 'ingest_batch_size' as integer")?,
         };
 
         // If tenant ID was not specified, generate one
@@ -489,16 +484,11 @@ impl PageServerNode {
                     .map(|x| x.parse::<bool>())
                     .transpose()
                     .context("Failed to parse 'gc_feedback' as bool")?,
-                ingest_commit_batch_size: settings
-                    .remove("ingest_commit_batch_size")
+                ingest_batch_size: settings
+                    .remove("ingest_batch_size")
                     .map(|x| x.parse::<NonZeroU64>())
                     .transpose()
-                    .context("Failed to parse 'ingest_commit_batch_size' as integer")?,
-                ingest_commit_layer_put_batch_size: settings
-                    .remove("ingest_commit_layer_put_batch_size")
-                    .map(|x| x.parse::<NonZeroU64>())
-                    .transpose()
-                    .context("Failed to parse 'ingest_commit_layer_put_batch_size' as integer")?,
+                    .context("Failed to parse 'ingest_batch_size' as integer")?,
             }
         };
 

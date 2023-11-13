@@ -114,7 +114,7 @@ pub mod defaults {
 #min_resident_size_override = .. # in bytes
 #evictions_low_residence_duration_metric_threshold = '{DEFAULT_EVICTIONS_LOW_RESIDENCE_DURATION_METRIC_THRESHOLD}'
 #gc_feedback = false
-#batch_ingest = true
+#ingest_batch_size = {DEFAULT_INGEST_BATCH_SIZE}
 
 [remote_storage]
 
@@ -885,22 +885,9 @@ impl PageServerConf {
             );
         }
 
-        if let Some(ingest_commit_batch_size) = item.get("ingest_commit_batch_size") {
-            t_conf.ingest_commit_batch_size = Some(
-                parse_toml_u64("ingest_commit_batch_size", ingest_commit_batch_size)?.try_into()?,
-            );
-        }
-
-        if let Some(ingest_commit_layer_put_batch_size) =
-            item.get("ingest_commit_layer_put_batch_size")
-        {
-            t_conf.ingest_commit_layer_put_batch_size = Some(
-                parse_toml_u64(
-                    "ingest_commit_layer_put_batch_size",
-                    ingest_commit_layer_put_batch_size,
-                )?
-                .try_into()?,
-            );
+        if let Some(ingest_batch_size) = item.get("ingest_batch_size") {
+            t_conf.ingest_batch_size =
+                Some(parse_toml_u64("ingest_batch_size", ingest_batch_size)?.try_into()?);
         }
 
         Ok(t_conf)

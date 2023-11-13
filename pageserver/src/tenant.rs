@@ -3351,10 +3351,7 @@ pub mod harness {
                     tenant_conf.evictions_low_residence_duration_metric_threshold,
                 ),
                 gc_feedback: Some(tenant_conf.gc_feedback),
-                ingest_commit_batch_size: Some(tenant_conf.ingest_commit_batch_size),
-                ingest_commit_layer_put_batch_size: Some(
-                    tenant_conf.ingest_commit_layer_put_batch_size,
-                ),
+                ingest_batch_size: Some(tenant_conf.ingest_batch_size),
             }
         }
     }
