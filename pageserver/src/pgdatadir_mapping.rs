@@ -13,7 +13,6 @@ use crate::repository::*;
 use crate::walrecord::NeonWalRecord;
 use anyhow::{ensure, Context};
 use bytes::{Buf, Bytes};
-use itertools::Itertools;
 use pageserver_api::reltag::{RelTag, SlruKind};
 use postgres_ffi::relfile_utils::{FSM_FORKNUM, VISIBILITYMAP_FORKNUM};
 use postgres_ffi::BLCKSZ;
@@ -1187,10 +1186,8 @@ impl<'a> DatadirModification<'a> {
                 }
             }
         }
-        // The right way to extend this is to also merge the values in the corresponding
-        // keys, but since pending_updates is guaranteed to be empty after the drain, this
-        // should also be fine.
-        self.pending_updates.extend(retained_pending_updates);
+
+        self.pending_updates = retained_pending_updates;
 
         if pending_nblocks != 0 {
             writer.update_current_logical_size(pending_nblocks * i64::from(BLCKSZ));
@@ -1212,20 +1209,11 @@ impl<'a> DatadirModification<'a> {
         let pending_nblocks = self.pending_nblocks;
         self.pending_nblocks = 0;
 
-        let pending_updates = self
-            .pending_updates
-            .drain()
-            .map(|(key, pending_updates)| {
-                pending_updates
-                    .into_iter()
-                    .map(|(lsn, value)| (key, lsn, value))
-                    .collect::<Vec<_>>()
-            })
-            .concat();
-        writer.put_batch(&pending_updates).await?;
+        writer.put_batch(&self.pending_updates).await?;
+        self.pending_updates.clear();
 
-        let pending_deletions: Vec<_> = self.pending_deletions.drain(..).collect();
-        writer.delete_batch(&pending_deletions).await?;
+        writer.delete_batch(&self.pending_deletions).await?;
+        self.pending_deletions.clear();
 
         writer.finish_write(lsn);
 

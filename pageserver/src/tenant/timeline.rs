@@ -2668,10 +2668,14 @@ impl Timeline {
         Ok(())
     }
 
-    async fn put_values(&self, values: &[(Key, Lsn, Value)]) -> anyhow::Result<()> {
-        if let Some((_, lsn, _)) = values.first() {
-            let layer = self.get_layer_for_write(*lsn).await?;
-            layer.put_values(values).await?;
+    async fn put_values(&self, values: &HashMap<Key, Vec<(Lsn, Value)>>) -> anyhow::Result<()> {
+        // Pick the first LSN in the batch to get the layer to write to.
+        for lsns in values.values() {
+            if let Some((lsn, _)) = lsns.first() {
+                let layer = self.get_layer_for_write(*lsn).await?;
+                layer.put_values(values).await?;
+                break;
+            }
         }
         Ok(())
     }
@@ -4805,7 +4809,7 @@ impl<'a> TimelineWriter<'a> {
         self.tl.put_value(key, lsn, value).await
     }
 
-    pub async fn put_batch(&self, batch: &[(Key, Lsn, Value)]) -> anyhow::Result<()> {
+    pub async fn put_batch(&self, batch: &HashMap<Key, Vec<(Lsn, Value)>>) -> anyhow::Result<()> {
         self.tl.put_values(batch).await
     }
 

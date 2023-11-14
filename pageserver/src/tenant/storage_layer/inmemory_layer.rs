@@ -273,11 +273,13 @@ impl InMemoryLayer {
         self.put_value_locked(&mut inner, key, lsn, val).await
     }
 
-    pub async fn put_values(&self, values: &[(Key, Lsn, Value)]) -> Result<()> {
+    pub async fn put_values(&self, values: &HashMap<Key, Vec<(Lsn, Value)>>) -> Result<()> {
         let mut inner = self.inner.write().await;
         self.assert_writable();
-        for (key, lsn, val) in values {
-            self.put_value_locked(&mut inner, *key, *lsn, val).await?;
+        for (key, vals) in values {
+            for (lsn, val) in vals {
+                self.put_value_locked(&mut inner, *key, *lsn, val).await?;
+            }
         }
         Ok(())
     }

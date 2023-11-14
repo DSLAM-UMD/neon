@@ -4224,23 +4224,21 @@ mod tests {
         let mut test_key = Key::from_hex("012222222233333333444444445500000000").unwrap();
         let mut blknum = 0;
         for _ in 0..50 {
-            let mut batch = vec![];
-
+            let mut batch: HashMap<Key, Vec<(Lsn, Value)>> = HashMap::new();
+            let mut last_lsn = lsn;
             for _ in 0..10000 {
                 test_key.field6 = blknum;
 
-                batch.push((
-                    test_key,
+                batch.entry(test_key).or_default().push((
                     lsn,
                     Value::Image(TEST_IMG(&format!("{} at {}", blknum, lsn))),
                 ));
 
                 keyspace.add_key(test_key);
+                last_lsn = lsn;
                 lsn = Lsn(lsn.0 + 0x10);
                 blknum += 1;
             }
-
-            let last_lsn = batch.last().unwrap().1;
 
             let writer = tline.writer().await;
             writer.put_batch(&batch).await?;
