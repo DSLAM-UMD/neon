@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
+use postgres_ffi::TimestampTz;
 use postgres_ffi::{TimeLineID, XLogSegNo, MAX_SEND_SIZE};
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
@@ -16,6 +17,7 @@ use storage_broker::proto::SafekeeperTimelineInfo;
 use tracing::*;
 
 use crate::control_file;
+use crate::metrics::DEBUG;
 use crate::send_wal::HotStandbyFeedback;
 
 use crate::wal_storage;
@@ -345,6 +347,8 @@ pub struct AppendRequestHeader {
     pub truncate_lsn: Lsn,
     // only for logging/debugging
     pub proposer_uuid: PgUuid,
+    /// time when proposer sent the message
+    pub proposer_send_time: TimestampTz,
 }
 
 /// Report safekeeper state to proposer
@@ -573,16 +577,32 @@ where
         msg: &ProposerAcceptorMessage,
     ) -> Result<Option<AcceptorProposerMessage>> {
         match msg {
-            ProposerAcceptorMessage::Greeting(msg) => self.handle_greeting(msg).await,
-            ProposerAcceptorMessage::VoteRequest(msg) => self.handle_vote_request(msg).await,
-            ProposerAcceptorMessage::Elected(msg) => self.handle_elected(msg).await,
+            ProposerAcceptorMessage::Greeting(msg) => {
+                let _timer = DEBUG.with_label_values(&["Greeting"]).start_timer();
+                self.handle_greeting(msg).await
+            }
+            ProposerAcceptorMessage::VoteRequest(msg) => {
+                let _timer = DEBUG.with_label_values(&["VoteRequest"]).start_timer();
+                self.handle_vote_request(msg).await
+            }
+            ProposerAcceptorMessage::Elected(msg) => {
+                let _timer = DEBUG.with_label_values(&["Elected"]).start_timer();
+                self.handle_elected(msg).await
+            }
             ProposerAcceptorMessage::AppendRequest(msg) => {
+                let _timer = DEBUG.with_label_values(&["AppendRequest"]).start_timer();
                 self.handle_append_request(msg, true).await
             }
             ProposerAcceptorMessage::NoFlushAppendRequest(msg) => {
+                let _timer = DEBUG
+                    .with_label_values(&["NoFlushAppendRequest"])
+                    .start_timer();
                 self.handle_append_request(msg, false).await
             }
-            ProposerAcceptorMessage::FlushWAL => self.handle_flush().await,
+            ProposerAcceptorMessage::FlushWAL => {
+                let _timer = DEBUG.with_label_values(&["FlushWAL"]).start_timer();
+                self.handle_flush().await
+            }
         }
     }
 
@@ -1129,6 +1149,7 @@ mod tests {
             commit_lsn: Lsn(0),
             truncate_lsn: Lsn(0),
             proposer_uuid: [0; 16],
+            proposer_send_time: 0,
         };
         let mut append_request = AppendRequest {
             h: ar_hdr.clone(),

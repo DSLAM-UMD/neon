@@ -268,6 +268,8 @@ typedef struct AppendRequestHeader
 	 */
 	XLogRecPtr	truncateLsn;
 	pg_uuid_t	proposerId;		/* for monitoring/debugging */
+
+	TimestampTz	proposerSendTime;	/* when proposer sent this message */
 }			AppendRequestHeader;
 
 /*

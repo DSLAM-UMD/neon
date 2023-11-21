@@ -167,6 +167,7 @@ pub async fn append_logical_message(
             commit_lsn,
             truncate_lsn: msg.truncate_lsn,
             proposer_uuid: [0u8; 16],
+            proposer_send_time: 0,
         },
         wal_data: Bytes::from(wal_data),
     });

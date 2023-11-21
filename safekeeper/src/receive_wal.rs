@@ -3,6 +3,7 @@
 //! sends replies back.
 
 use crate::handler::SafekeeperPostgresHandler;
+use crate::metrics::DEBUG;
 use crate::safekeeper::AcceptorProposerMessage;
 use crate::safekeeper::ProposerAcceptorMessage;
 use crate::safekeeper::ServerInfo;
@@ -15,6 +16,7 @@ use postgres_backend::CopyStreamHandlerEnd;
 use postgres_backend::PostgresBackend;
 use postgres_backend::PostgresBackendReader;
 use postgres_backend::QueryError;
+use postgres_ffi::get_current_timestamp;
 use pq_proto::BeMessage;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -271,6 +273,11 @@ impl WalAcceptor {
                 // Otherwise, we might end up in a situation where we read a message, but don't
                 // process it.
                 while let ProposerAcceptorMessage::AppendRequest(append_request) = next_msg {
+                    let now = get_current_timestamp();
+                    DEBUG
+                        .with_label_values(&["proposer_safekeeper_recv"])
+                        .observe((now - append_request.h.proposer_send_time) as f64 / 1_000_000.0);
+
                     let noflush_msg = ProposerAcceptorMessage::NoFlushAppendRequest(append_request);
 
                     if let Some(reply) = self.tli.process_msg(&noflush_msg).await? {

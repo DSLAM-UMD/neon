@@ -1670,6 +1670,7 @@ PrepareAppendRequest(AppendRequestHeader * req, XLogRecPtr beginLsn, XLogRecPtr 
 	req->commitLsn = GetAcknowledgedByQuorumWALPosition();
 	req->truncateLsn = truncateLsn;
 	req->proposerId = greetRequest.proposerId;
+	req->proposerSendTime = GetCurrentTimestamp();
 }
 
 /*
