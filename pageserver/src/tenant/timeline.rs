@@ -11,6 +11,7 @@ use bytes::Bytes;
 use fail::fail_point;
 use futures::StreamExt;
 use itertools::Itertools;
+use metrics::Histogram;
 use pageserver_api::models::{
     DownloadRemoteLayersTaskInfo, DownloadRemoteLayersTaskSpawnRequest,
     DownloadRemoteLayersTaskState, LayerMapInfo, LayerResidenceEventReason, LayerResidenceStatus,
@@ -55,8 +56,9 @@ use crate::tenant::{
 use crate::config::PageServerConf;
 use crate::keyspace::{KeyPartitioning, KeySpace, KeySpaceRandomAccum};
 use crate::metrics::{
-    TimelineMetrics, MATERIALIZED_PAGE_CACHE_HIT, MATERIALIZED_PAGE_CACHE_HIT_DIRECT,
-    RECONSTRUCT_TIME, UNEXPECTED_ONDEMAND_DOWNLOADS,
+    TimelineMetrics, UmdLayersLockType, MATERIALIZED_PAGE_CACHE_HIT,
+    MATERIALIZED_PAGE_CACHE_HIT_DIRECT, RECONSTRUCT_TIME, UMD_DEBUG, UMD_LAYERS_LOCK_TIME,
+    UNEXPECTED_ONDEMAND_DOWNLOADS,
 };
 use crate::pgdatadir_mapping::LsnForTimestamp;
 use crate::pgdatadir_mapping::{is_rel_fsm_block_key, is_rel_vm_block_key};
@@ -525,7 +527,13 @@ impl Timeline {
     /// This method makes no distinction between local and remote layers.
     /// Hence, the result **does not represent local filesystem usage**.
     pub async fn layer_size_sum(&self) -> u64 {
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::ReadWait, "layer_size_sum")
+            .start_timer();
         let guard = self.layers.read().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::ReadAcquired, "layer_size_sum")
+            .start_timer();
         let layer_map = guard.layer_map();
         let mut size = 0;
         for l in layer_map.iter_historic_layers() {
@@ -886,7 +894,19 @@ impl Timeline {
     pub async fn check_checkpoint_distance(self: &Arc<Timeline>) -> anyhow::Result<()> {
         let last_lsn = self.get_last_record_lsn();
         let open_layer_size = {
+            let _timer = self
+                .get_layers_lock_duration_histogram(
+                    UmdLayersLockType::ReadWait,
+                    "check_checkpoint_distance",
+                )
+                .start_timer();
             let guard = self.layers.read().await;
+            let _timer = self
+                .get_layers_lock_duration_histogram(
+                    UmdLayersLockType::ReadAcquired,
+                    "check_checkpoint_distance",
+                )
+                .start_timer();
             let layers = guard.layer_map();
             let Some(open_layer) = layers.open_layer.as_ref() else {
                 return Ok(());
@@ -1018,7 +1038,13 @@ impl Timeline {
     }
 
     pub async fn layer_map_info(&self, reset: LayerAccessStatsReset) -> LayerMapInfo {
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::ReadWait, "layer_map_info")
+            .start_timer();
         let guard = self.layers.read().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::ReadAcquired, "layer_map_info")
+            .start_timer();
         let layer_map = guard.layer_map();
         let mut in_memory_layers = Vec::with_capacity(layer_map.frozen_layers.len() + 1);
         if let Some(open_layer) = &layer_map.open_layer {
@@ -1146,7 +1172,16 @@ impl Timeline {
         }
 
         // start the batch update
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "evict_layer_batch")
+            .start_timer();
         let mut guard = self.layers.write().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::WriteAcquired,
+                "evict_layer_batch",
+            )
+            .start_timer();
         let mut results = Vec::with_capacity(layers_to_evict.len());
 
         for l in layers_to_evict.iter() {
@@ -1348,6 +1383,21 @@ impl Timeline {
         tenant_conf
             .gc_feedback
             .unwrap_or(self.conf.default_tenant_conf.gc_feedback)
+    }
+
+    fn get_layers_lock_duration_histogram(&self, typ: UmdLayersLockType, name: &str) -> Histogram {
+        UMD_LAYERS_LOCK_TIME.with_label_values(&[
+            &self.tenant_id.to_string(),
+            &self.timeline_id.to_string(),
+            &self.region_id.to_string(),
+            match typ {
+                UmdLayersLockType::ReadWait => "read_wait",
+                UmdLayersLockType::ReadAcquired => "read_acquired",
+                UmdLayersLockType::WriteWait => "write_wait",
+                UmdLayersLockType::WriteAcquired => "write_acquired",
+            },
+            name,
+        ])
     }
 
     pub(super) fn tenant_conf_updated(&self) {
@@ -1599,9 +1649,21 @@ impl Timeline {
     /// Initialize with an empty layer map. Used when creating a new timeline.
     ///
     pub(super) fn init_empty_layer_map(&self, start_lsn: Lsn) {
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::WriteWait,
+                "init_empty_layer_map",
+            )
+            .start_timer();
         let mut layers = self.layers.try_write().expect(
             "in the context where we call this function, no other task has access to the object",
         );
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::WriteAcquired,
+                "init_empty_layer_map",
+            )
+            .start_timer();
         layers.initialize_empty(Lsn(start_lsn.0));
     }
 
@@ -1609,8 +1671,13 @@ impl Timeline {
     /// Scan the timeline directory to populate the layer map.
     ///
     pub(super) async fn load_layer_map(&self, disk_consistent_lsn: Lsn) -> anyhow::Result<()> {
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "load_layer_map")
+            .start_timer();
         let mut guard = self.layers.write().await;
-
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::WriteAcquired, "load_layer_map")
+            .start_timer();
         let timer = self.metrics.load_layer_map_histo.start_timer();
 
         // Scan timeline directory and create ImageFileName and DeltaFilename
@@ -1736,9 +1803,23 @@ impl Timeline {
         // Create RemoteLayer instances for them.
         let mut local_only_layers = local_layers;
 
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::WriteWait,
+                "create_remote_layers",
+            )
+            .start_timer();
+
         // We're holding a layer map lock for a while but this
         // method is only called during init so it's fine.
         let mut guard = self.layers.write().await;
+
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::WriteAcquired,
+                "create_remote_layers",
+            )
+            .start_timer();
 
         let mut corrupted_local_layers = Vec::new();
         let mut added_remote_layers = Vec::new();
@@ -1888,7 +1969,20 @@ impl Timeline {
         let disk_consistent_lsn = up_to_date_metadata.disk_consistent_lsn();
 
         let local_layers = {
+            let _timer = self
+                .get_layers_lock_duration_histogram(
+                    UmdLayersLockType::ReadWait,
+                    "reconcile_with_remote",
+                )
+                .start_timer();
             let guard = self.layers.read().await;
+            let _timer = self
+                .get_layers_lock_duration_histogram(
+                    UmdLayersLockType::ReadAcquired,
+                    "reconcile_with_remote",
+                )
+                .start_timer();
+
             let layers = guard.layer_map();
             layers
                 .iter_historic_layers()
@@ -2274,7 +2368,13 @@ impl Timeline {
     }
 
     async fn find_layer(&self, layer_file_name: &str) -> Option<Arc<dyn PersistentLayer>> {
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::ReadWait, "find_layer")
+            .start_timer();
         let guard = self.layers.read().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::ReadAcquired, "find_layer")
+            .start_timer();
         for historic_layer in guard.layer_map().iter_historic_layers() {
             let historic_layer_name = historic_layer.filename().file_name();
             if layer_file_name == historic_layer_name {
@@ -2458,7 +2558,18 @@ impl Timeline {
 
             // Grab the pointers to the in-memory layers
             let (open_layer, frozen_layers) = {
+                let _timer = self
+                    .get_layers_lock_duration_histogram(
+                        UmdLayersLockType::ReadWait,
+                        "get_reconstruct_data:inmem_layers",
+                    )
+                    .start_timer();
                 let guard = timeline.layers.read().await;
+                _timer.stop_and_record();
+                let _timer = self.get_layers_lock_duration_histogram(
+                    UmdLayersLockType::ReadAcquired,
+                    "get_reconstruct_data:inmem_layers",
+                );
                 let open_layer = guard.layer_map().open_layer.clone();
                 let frozen_layers = guard.layer_map().frozen_layers.clone();
                 (open_layer, frozen_layers)
@@ -2534,7 +2645,18 @@ impl Timeline {
                     }
 
                     let persistent_layer = {
+                        let _timer = self
+                            .get_layers_lock_duration_histogram(
+                                UmdLayersLockType::ReadWait,
+                                "get_reconstruct_data:persistent_layers",
+                            )
+                            .start_timer();
                         let guard = timeline.layers.read().await;
+                        _timer.stop_and_record();
+                        let _timer = self.get_layers_lock_duration_histogram(
+                            UmdLayersLockType::ReadAcquired,
+                            "get_reconstruct_data:persistent_layers",
+                        );
                         guard.layer_map().search(key, cont_lsn).map(
                             |SearchResult { lsn_floor, layer }| {
                                 (guard.get_from_desc(&layer), lsn_floor)
@@ -2667,7 +2789,17 @@ impl Timeline {
     /// Get a handle to the latest layer for appending.
     ///
     async fn get_layer_for_write(&self, lsn: Lsn) -> anyhow::Result<Arc<InMemoryLayer>> {
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "get_layer_for_write")
+            .start_timer();
         let mut guard = self.layers.write().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::WriteAcquired,
+                "get_layer_for_write",
+            )
+            .start_timer();
+
         let layer = guard.get_layer_for_write(
             lsn,
             self.get_last_record_lsn(),
@@ -2680,8 +2812,32 @@ impl Timeline {
 
     async fn put_value(&self, key: Key, lsn: Lsn, val: &Value) -> anyhow::Result<()> {
         //info!("PUT: key {} at {}", key, lsn);
-        let layer = self.get_layer_for_write(lsn).await?;
-        layer.put_value(key, lsn, val).await?;
+        let layer = {
+            let _timer = UMD_DEBUG
+                .with_label_values(&[
+                    &self.tenant_id.to_string(),
+                    &self.timeline_id.to_string(),
+                    &self.region_id.to_string(),
+                    "put_value:get_layer_for_write",
+                ])
+                .start_timer();
+
+            self.get_layer_for_write(lsn).await?
+        };
+
+        {
+            let _timer = UMD_DEBUG
+                .with_label_values(&[
+                    &self.tenant_id.to_string(),
+                    &self.timeline_id.to_string(),
+                    &self.region_id.to_string(),
+                    "put_value",
+                ])
+                .start_timer();
+
+            layer.put_value(key, lsn, val).await?;
+        }
+
         Ok(())
     }
 
@@ -2689,7 +2845,17 @@ impl Timeline {
         // Pick the first LSN in the batch to get the layer to write to.
         for lsns in values.values() {
             if let Some((lsn, _)) = lsns.first() {
-                let layer = self.get_layer_for_write(*lsn).await?;
+                let layer = {
+                    let _timer = UMD_DEBUG
+                        .with_label_values(&[
+                            &self.tenant_id.to_string(),
+                            &self.timeline_id.to_string(),
+                            &self.region_id.to_string(),
+                            "put_values:get_layer_for_write",
+                        ])
+                        .start_timer();
+                    self.get_layer_for_write(*lsn).await?
+                };
                 layer.put_values(values).await?;
                 break;
             }
@@ -2726,7 +2892,16 @@ impl Timeline {
         } else {
             Some(self.write_lock.lock().await)
         };
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "freeze_inmem_layer")
+            .start_timer();
         let mut guard = self.layers.write().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::WriteAcquired,
+                "freeze_inmem_layer",
+            )
+            .start_timer();
         guard
             .try_freeze_in_memory_layer(self.get_last_record_lsn(), &self.last_freeze_at)
             .await;
@@ -2753,7 +2928,19 @@ impl Timeline {
             let flush_counter = *layer_flush_start_rx.borrow();
             let result = loop {
                 let layer_to_flush = {
+                    let _timer = self
+                        .get_layers_lock_duration_histogram(
+                            UmdLayersLockType::ReadWait,
+                            "flush_loop",
+                        )
+                        .start_timer();
                     let guard = self.layers.read().await;
+                    let _timer = self
+                        .get_layers_lock_duration_histogram(
+                            UmdLayersLockType::ReadAcquired,
+                            "flush_loop",
+                        )
+                        .start_timer();
                     guard.layer_map().frozen_layers.front().cloned()
                     // drop 'layers' lock to allow concurrent reads and writes
                 };
@@ -2887,8 +3074,19 @@ impl Timeline {
         // in-memory layer from the map now. The flushed layer is stored in
         // the mapping in `create_delta_layer`.
         {
+            let _timer = self
+                .get_layers_lock_duration_histogram(
+                    UmdLayersLockType::WriteWait,
+                    "flush_frozen_layer",
+                )
+                .start_timer();
             let mut guard = self.layers.write().await;
-
+            let _timer = self
+                .get_layers_lock_duration_histogram(
+                    UmdLayersLockType::WriteAcquired,
+                    "flush_frozen_layer",
+                )
+                .start_timer();
             if let Some(ref l) = delta_layer_to_add {
                 // TODO: move access stats, metrics update, etc. into layer manager.
                 l.access_stats().record_residence_event(
@@ -3087,7 +3285,19 @@ impl Timeline {
     ) -> anyhow::Result<bool> {
         let threshold = self.get_image_creation_threshold();
 
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::ReadWait,
+                "time_for_new_image_layer",
+            )
+            .start_timer();
         let guard = self.layers.read().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::ReadAcquired,
+                "time_for_new_image_layer",
+            )
+            .start_timer();
         let layers = guard.layer_map();
 
         let mut max_deltas = 0;
@@ -3266,7 +3476,16 @@ impl Timeline {
 
         let mut layer_paths_to_upload = HashMap::with_capacity(image_layers.len());
 
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "create_image_layers")
+            .start_timer();
         let mut guard = self.layers.write().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::WriteAcquired,
+                "create_image_layers",
+            )
+            .start_timer();
         let timeline_path = self.conf.timeline_path(&self.tenant_id, &self.timeline_id);
 
         for l in &image_layers {
@@ -3290,6 +3509,7 @@ impl Timeline {
         }
         guard.track_new_image_layers(image_layers);
         drop_wlock(guard);
+        _timer.stop_and_record();
         timer.stop_and_record();
 
         Ok(layer_paths_to_upload)
@@ -3913,7 +4133,14 @@ impl Timeline {
                 .context("wait for layer upload ops to complete")?;
         }
 
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "compact_level0")
+            .start_timer();
         let mut guard = self.layers.write().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::WriteAcquired, "compact_level0")
+            .start_timer();
+
         let mut new_layer_paths = HashMap::with_capacity(new_layers.len());
 
         // In some rare cases, we may generate a file with exactly the same key range / LSN as before the compaction.
@@ -3984,6 +4211,7 @@ impl Timeline {
         )?;
 
         drop_wlock(guard);
+        _timer.stop_and_record();
 
         // Also schedule the deletions in remote storage
         if let Some(remote_client) = &self.remote_client {
@@ -4200,7 +4428,14 @@ impl Timeline {
         // 4. newer on-disk image layers cover the layer's whole key range
         //
         // TODO holding a write lock is too agressive and avoidable
-        let mut guard = self.layers.write().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::WriteWait, "gc_timeline")
+            .start_timer();
+        let mut guard: tokio::sync::RwLockWriteGuard<'_, LayerManager> = self.layers.write().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(UmdLayersLockType::WriteAcquired, "gc_timeline")
+            .start_timer();
+
         let layers = guard.layer_map();
         'outer: for l in layers.iter_historic_layers() {
             result.layers_total += 1;
@@ -4628,7 +4863,19 @@ impl Timeline {
     ) {
         let mut downloads = Vec::new();
         {
+            let _timer = self
+                .get_layers_lock_duration_histogram(
+                    UmdLayersLockType::ReadWait,
+                    "download_all_remote_layers",
+                )
+                .start_timer();
             let guard = self.layers.read().await;
+            let _timer = self
+                .get_layers_lock_duration_histogram(
+                    UmdLayersLockType::ReadAcquired,
+                    "download_all_remote_layers",
+                )
+                .start_timer();
             let layers = guard.layer_map();
             layers
                 .iter_historic_layers()
@@ -4734,7 +4981,19 @@ impl LocalLayerInfoForDiskUsageEviction {
 impl Timeline {
     /// Returns non-remote layers for eviction.
     pub(crate) async fn get_local_layers_for_disk_usage_eviction(&self) -> DiskUsageEvictionInfo {
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::ReadWait,
+                "get_local_layers_for_disk_usage_eviction",
+            )
+            .start_timer();
         let guard = self.layers.read().await;
+        let _timer = self
+            .get_layers_lock_duration_histogram(
+                UmdLayersLockType::ReadAcquired,
+                "get_local_layers_for_disk_usage_eviction",
+            )
+            .start_timer();
         let layers = guard.layer_map();
 
         let mut max_layer_size: Option<u64> = None;

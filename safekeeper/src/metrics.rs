@@ -11,7 +11,8 @@ use futures::Future;
 use metrics::{
     core::{AtomicU64, Collector, Desc, GenericCounter, GenericGaugeVec, Opts},
     proto::MetricFamily,
-    register_int_counter, register_int_counter_vec, Gauge, IntCounter, IntCounterVec, IntGaugeVec,
+    register_histogram_vec, register_int_counter, register_int_counter_vec, Gauge, HistogramVec,
+    IntCounter, IntCounterVec, IntGaugeVec,
 };
 use once_cell::sync::Lazy;
 
@@ -704,3 +705,36 @@ async fn collect_timeline_metrics() -> Vec<FullTimelineInfo> {
     }
     res
 }
+
+pub static SEND_WAL_BYTES: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "safekeeper_send_wal_bytes",
+        "Bytes sent in a single replication message",
+        &["tenant_id", "timeline_id", "peer_addr"],
+        vec![
+            1.0,
+            10.0,
+            100.0,
+            1024.0,
+            8192.0,
+            128.0 * 1024.0,
+            1024.0 * 1024.0,
+            10.0 * 1024.0 * 1024.0
+        ]
+    )
+    .expect("Failed to register safekeeper_send_wal_bytes histogram")
+});
+
+pub static DEBUG: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "safekeeper_debug_seconds",
+        "For debugging",
+        &["tenant_id", "timeline_id", "peer_addr", "name"],
+        vec![
+            0.000_001, 0.000_010, 0.000_100, // 1 us, 10 us, 100 us
+            0.001_000, 0.010_000, 0.100_000, // 1 ms, 10 ms, 100 ms
+            1.0, 10.0, 100.0, // 1 s, 10 s, 100 s
+        ],
+    )
+    .expect("Failed to register safekeeper_send_wal_time_seconds histogram")
+});

@@ -30,7 +30,7 @@ use crate::safekeeper::{
 use crate::send_wal::WalSenders;
 use crate::{control_file, safekeeper::UNKNOWN_SERVER_VERSION};
 
-use crate::metrics::FullTimelineInfo;
+use crate::metrics::{FullTimelineInfo, DEBUG};
 use crate::wal_storage::Storage as wal_storage_iface;
 use crate::SafeKeeperConf;
 use crate::{debug_dump, wal_storage};
@@ -539,7 +539,17 @@ impl Timeline {
         let mut rmsg: Option<AcceptorProposerMessage>;
         let commit_lsn: Lsn;
         {
+            let timer = DEBUG
+                .with_label_values(&[
+                    &self.ttid.tenant_id.to_string(),
+                    &self.ttid.timeline_id.to_string(),
+                    "",
+                    "process_msg_lock_wait_time",
+                ])
+                .start_timer();
             let mut shared_state = self.write_shared_state().await;
+            timer.stop_and_record();
+
             rmsg = shared_state.sk.process_msg(msg).await?;
 
             // if this is AppendResponse, fill in proper pageserver and hot

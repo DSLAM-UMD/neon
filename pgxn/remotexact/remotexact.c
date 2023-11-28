@@ -450,6 +450,7 @@ rx_execute_remote_xact(void)
 	CollectedRelation	*relation;
 	HASH_SEQ_STATUS		status;
 	StringInfoData		buf;
+	StringInfoData 		resp_buf;
 	int		read_len = 0;
 	int 	num_read_rels = 0;
 
@@ -539,7 +540,6 @@ rx_execute_remote_xact(void)
 	/* Read the response */
 	PG_TRY();
 	{
-		StringInfoData resp_buf;
 		int	rc;
 
 		rc = call_PQgetCopyData(&resp_buf.data);
@@ -547,10 +547,6 @@ rx_execute_remote_xact(void)
 		{
 			resp_buf.len = rc;
 			resp_buf.cursor = 0;
-	
-			check_for_rollback(&resp_buf);
-
-			PQfreemem(resp_buf.data);
 		}
 		else if (rc == -1)
 			remotexact_log(ERROR, "connection closed by xactserver");
@@ -565,6 +561,10 @@ rx_execute_remote_xact(void)
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
+
+	check_for_rollback(&resp_buf);
+
+	PQfreemem(resp_buf.data);
 }
 
 static void
