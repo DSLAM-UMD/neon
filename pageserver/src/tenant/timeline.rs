@@ -2456,15 +2456,20 @@ impl Timeline {
                 continue 'outer;
             }
 
+            // Grab the pointers to the in-memory layers
+            let (open_layer, frozen_layers) = {
+                let guard = timeline.layers.read().await;
+                let open_layer = guard.layer_map().open_layer.clone();
+                let frozen_layers = guard.layer_map().frozen_layers.clone();
+                (open_layer, frozen_layers)
+            };
+
             #[allow(clippy::never_loop)] // see comment at bottom of this loop
             'layer_map_search: loop {
                 let remote_layer = {
-                    let guard = timeline.layers.read().await;
-                    let layers = guard.layer_map();
-
                     // Check the open and frozen in-memory layers first, in order from newest
                     // to oldest.
-                    if let Some(open_layer) = &layers.open_layer {
+                    if let Some(open_layer) = &open_layer {
                         let start_lsn = open_layer.get_lsn_range().start;
                         if cont_lsn > start_lsn {
                             //info!("CHECKING for {} at {} on open layer {}", key, cont_lsn, open_layer.filename().display());
@@ -2496,7 +2501,8 @@ impl Timeline {
                             continue 'outer;
                         }
                     }
-                    for frozen_layer in layers.frozen_layers.iter().rev() {
+
+                    for frozen_layer in frozen_layers.iter().rev() {
                         let start_lsn = frozen_layer.get_lsn_range().start;
                         if cont_lsn > start_lsn {
                             //info!("CHECKING for {} at {} on frozen layer {}", key, cont_lsn, frozen_layer.filename().display());
@@ -2527,8 +2533,16 @@ impl Timeline {
                         }
                     }
 
-                    if let Some(SearchResult { lsn_floor, layer }) = layers.search(key, cont_lsn) {
-                        let layer = guard.get_from_desc(&layer);
+                    let persistent_layer = {
+                        let guard = timeline.layers.read().await;
+                        guard.layer_map().search(key, cont_lsn).map(
+                            |SearchResult { lsn_floor, layer }| {
+                                (guard.get_from_desc(&layer), lsn_floor)
+                            },
+                        )
+                    };
+
+                    if let Some((layer, lsn_floor)) = persistent_layer {
                         // If it's a remote layer, download it and retry.
                         if let Some(remote_layer) =
                             super::storage_layer::downcast_remote_layer(&layer)
