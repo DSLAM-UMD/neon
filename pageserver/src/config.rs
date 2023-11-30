@@ -1226,7 +1226,7 @@ background_task_maximum_delay = '334 s'
                 test_remote_failures: 0,
                 ondemand_download_behavior_treat_error_as_warn: false,
                 background_task_maximum_delay: Duration::from_secs(334),
-                ingest_batch_size: 1,
+                ingest_batch_size: 100,
             },
             "Should be able to parse all basic config values correctly"
         );
