@@ -1285,6 +1285,12 @@ impl<'a> DatadirModification<'a> {
     }
 }
 
+/// This struct facilitates accessing either a committed key from the timeline at a
+/// specific LSN, or the latest uncommitted key from a pending modification.
+/// During WAL ingestion, the records from multiple LSNs may be batched in the same
+/// modification before being flushed to the timeline. Hence, the routines in WalIngest
+/// need to look up the keys in the modification first before looking them up in the
+/// timeline to not miss the latest updates.
 #[derive(Clone, Copy)]
 pub enum Version<'a> {
     Lsn(Lsn),

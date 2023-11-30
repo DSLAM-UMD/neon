@@ -332,14 +332,7 @@ pub(super) async fn handle_walreceiver_connection(
 
                         // Ingest the records without immediately committing them.
                         walingest
-                            .ingest_record(
-                                recdata,
-                                lsn,
-                                &mut modification,
-                                &mut decoded,
-                                &ctx,
-                                false,
-                            )
+                            .ingest_record(recdata, lsn, &mut modification, &mut decoded, &ctx)
                             .await
                             .with_context(|| format!("could not ingest record at {lsn}"))?;
 
