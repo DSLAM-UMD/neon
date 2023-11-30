@@ -380,11 +380,6 @@ impl PageServerNode {
                 .map(|x| x.parse::<bool>())
                 .transpose()
                 .context("Failed to parse 'gc_feedback' as bool")?,
-            ingest_batch_size: settings
-                .remove("ingest_batch_size")
-                .map(|x| x.parse::<NonZeroU64>())
-                .transpose()
-                .context("Failed to parse 'ingest_batch_size' as integer")?,
         };
 
         // If tenant ID was not specified, generate one
@@ -484,11 +479,6 @@ impl PageServerNode {
                     .map(|x| x.parse::<bool>())
                     .transpose()
                     .context("Failed to parse 'gc_feedback' as bool")?,
-                ingest_batch_size: settings
-                    .remove("ingest_batch_size")
-                    .map(|x| x.parse::<NonZeroU64>())
-                    .transpose()
-                    .context("Failed to parse 'ingest_batch_size' as integer")?,
             }
         };
 

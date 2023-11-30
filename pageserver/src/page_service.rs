@@ -924,7 +924,7 @@ impl PageServerHandler {
                 .await?;
 
         let seg_exists = timeline
-            .get_slru_segment_exists(req.kind, req.segno, lsn, ctx)
+            .get_slru_segment_exists(req.kind, req.segno, Version::Lsn(lsn), ctx)
             .await?;
         let mut page = None;
 

@@ -68,6 +68,8 @@ pub mod defaults {
     pub const DEFAULT_SYNTHETIC_SIZE_CALCULATION_INTERVAL: &str = "10 min";
     pub const DEFAULT_BACKGROUND_TASK_MAXIMUM_DELAY: &str = "10s";
 
+    pub const DEFAULT_INGEST_BATCH_SIZE: u64 = 100;
+
     ///
     /// Default built-in configuration file.
     ///
@@ -80,6 +82,7 @@ pub mod defaults {
 #wait_lsn_timeout = '{DEFAULT_WAIT_LSN_TIMEOUT}'
 #wal_redo_timeout = '{DEFAULT_WAL_REDO_TIMEOUT}'
 
+#page_cache_size = {DEFAULT_PAGE_CACHE_SIZE}
 #max_file_descriptors = {DEFAULT_MAX_FILE_DESCRIPTORS}
 
 # initial superuser role name to use when creating a new tenant
@@ -99,6 +102,8 @@ pub mod defaults {
 
 #background_task_maximum_delay = '{DEFAULT_BACKGROUND_TASK_MAXIMUM_DELAY}'
 
+#ingest_batch_size = {DEFAULT_INGEST_BATCH_SIZE}
+
 [tenant_config]
 #checkpoint_distance = {DEFAULT_CHECKPOINT_DISTANCE} # in bytes
 #checkpoint_timeout = {DEFAULT_CHECKPOINT_TIMEOUT}
@@ -114,7 +119,6 @@ pub mod defaults {
 #min_resident_size_override = .. # in bytes
 #evictions_low_residence_duration_metric_threshold = '{DEFAULT_EVICTIONS_LOW_RESIDENCE_DURATION_METRIC_THRESHOLD}'
 #gc_feedback = false
-#ingest_batch_size = {DEFAULT_INGEST_BATCH_SIZE}
 
 [remote_storage]
 
@@ -205,6 +209,9 @@ pub struct PageServerConf {
     /// has it's initial logical size calculated. Not running background tasks for some seconds is
     /// not terrible.
     pub background_task_maximum_delay: Duration,
+
+    /// Maximum number of WAL records to be ingested and committed at the same time
+    pub ingest_batch_size: u64,
 }
 
 /// We do not want to store this in a PageServerConf because the latter may be logged
@@ -279,6 +286,8 @@ struct PageServerConfigBuilder {
     ondemand_download_behavior_treat_error_as_warn: BuilderValue<bool>,
 
     background_task_maximum_delay: BuilderValue<Duration>,
+
+    ingest_batch_size: BuilderValue<u64>,
 }
 
 impl Default for PageServerConfigBuilder {
@@ -341,6 +350,8 @@ impl Default for PageServerConfigBuilder {
                 DEFAULT_BACKGROUND_TASK_MAXIMUM_DELAY,
             )
             .unwrap()),
+
+            ingest_batch_size: Set(DEFAULT_INGEST_BATCH_SIZE),
         }
     }
 }
@@ -469,6 +480,10 @@ impl PageServerConfigBuilder {
         self.background_task_maximum_delay = BuilderValue::Set(delay);
     }
 
+    pub fn ingest_batch_size(&mut self, ingest_batch_size: u64) {
+        self.ingest_batch_size = BuilderValue::Set(ingest_batch_size)
+    }
+
     pub fn build(self) -> anyhow::Result<PageServerConf> {
         let concurrent_tenant_size_logical_size_queries = self
             .concurrent_tenant_size_logical_size_queries
@@ -554,6 +569,9 @@ impl PageServerConfigBuilder {
             background_task_maximum_delay: self
                 .background_task_maximum_delay
                 .ok_or(anyhow!("missing background_task_maximum_delay"))?,
+            ingest_batch_size: self
+                .ingest_batch_size
+                .ok_or(anyhow!("missing ingest_batch_size"))?,
         })
     }
 }
@@ -759,6 +777,7 @@ impl PageServerConf {
                 },
                 "ondemand_download_behavior_treat_error_as_warn" => builder.ondemand_download_behavior_treat_error_as_warn(parse_toml_bool(key, item)?),
                 "background_task_maximum_delay" => builder.background_task_maximum_delay(parse_toml_duration(key, item)?),
+                "ingest_batch_size" => builder.ingest_batch_size(parse_toml_u64(key, item)?),
                 _ => bail!("unrecognized pageserver option '{key}'"),
             }
         }
@@ -885,11 +904,6 @@ impl PageServerConf {
             );
         }
 
-        if let Some(ingest_batch_size) = item.get("ingest_batch_size") {
-            t_conf.ingest_batch_size =
-                Some(parse_toml_u64("ingest_batch_size", ingest_batch_size)?.try_into()?);
-        }
-
         Ok(t_conf)
     }
 
@@ -932,6 +946,7 @@ impl PageServerConf {
             test_remote_failures: 0,
             ondemand_download_behavior_treat_error_as_warn: false,
             background_task_maximum_delay: Duration::ZERO,
+            ingest_batch_size: defaults::DEFAULT_INGEST_BATCH_SIZE,
         }
     }
 }
@@ -1155,6 +1170,7 @@ background_task_maximum_delay = '334 s'
                 background_task_maximum_delay: humantime::parse_duration(
                     defaults::DEFAULT_BACKGROUND_TASK_MAXIMUM_DELAY
                 )?,
+                ingest_batch_size: defaults::DEFAULT_INGEST_BATCH_SIZE,
             },
             "Correct defaults should be used when no config values are provided"
         );
@@ -1210,6 +1226,7 @@ background_task_maximum_delay = '334 s'
                 test_remote_failures: 0,
                 ondemand_download_behavior_treat_error_as_warn: false,
                 background_task_maximum_delay: Duration::from_secs(334),
+                ingest_batch_size: 1,
             },
             "Should be able to parse all basic config values correctly"
         );
