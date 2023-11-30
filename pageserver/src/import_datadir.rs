@@ -26,7 +26,7 @@ use postgres_ffi::DBState_DB_SHUTDOWNED;
 use postgres_ffi::Oid;
 use postgres_ffi::XLogFileName;
 use postgres_ffi::{BLCKSZ, WAL_SEGMENT_SIZE};
-use utils::lsn::Lsn;
+use utils::lsn::{Lsn, RecordLsn};
 
 // Returns checkpoint LSN from controlfile
 pub fn get_lsn_from_controlfile(path: &Path) -> Result<Lsn> {
@@ -602,7 +602,10 @@ async fn import_file(
         // but it is ok to call `finish_write()`, because final `modification.commit()`
         // will update lsn once more to the final one.
         let writer = modification.tline.writer().await;
-        writer.finish_write(prev_lsn);
+        writer.finish_write(RecordLsn {
+            last: prev_lsn,
+            prev: Lsn::INVALID,
+        });
 
         debug!("imported zenith signal {}", prev_lsn);
     } else if file_path.starts_with("pg_tblspc") {

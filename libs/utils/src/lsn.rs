@@ -243,24 +243,41 @@ impl From<Lsn> for AtomicLsn {
 }
 
 /// Pair of LSN's pointing to the end of the last valid record and previous one
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordLsn {
-    /// LSN at the end of the current record
+    /// LSN at the end of the current record    
     pub last: Lsn,
     /// LSN at the end of the previous record
     pub prev: Lsn,
 }
 
-/// Expose `self.last` as counter to be able to use RecordLsn in SeqWait
-impl MonotonicCounter<Lsn> for RecordLsn {
-    fn cnt_advance(&mut self, lsn: Lsn) {
-        assert!(self.last <= lsn);
-        let new_prev = self.last;
-        self.last = lsn;
-        self.prev = new_prev;
+impl Ord for RecordLsn {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.last.cmp(&other.last)
     }
-    fn cnt_value(&self) -> Lsn {
-        self.last
+}
+
+impl PartialOrd for RecordLsn {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Expose `self.last` as counter to be able to use RecordLsn in SeqWait
+impl MonotonicCounter<RecordLsn> for RecordLsn {
+    fn cnt_advance(&mut self, lsn: RecordLsn) {
+        assert!(lsn.prev <= lsn.last);
+        assert!(self.last <= lsn.last);
+        if lsn.prev == Lsn::INVALID {
+            self.prev = self.last;
+            self.last = lsn.last;
+        } else {
+            self.prev = lsn.prev;
+            self.last = lsn.last;
+        }
+    }
+    fn cnt_value(&self) -> RecordLsn {
+        *self
     }
 }
 

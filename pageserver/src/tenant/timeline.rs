@@ -204,7 +204,7 @@ pub struct Timeline {
     // 'last_record_lsn.load().prev'. It's used to set the xl_prev pointer of the
     // first WAL record when the node is started up. But here, we just
     // keep track of it.
-    last_record_lsn: SeqWait<RecordLsn, Lsn>,
+    last_record_lsn: SeqWait<RecordLsn, RecordLsn>,
 
     // All WAL records have been processed and stored durably on files on
     // local disk, up to this LSN. On crash and restart, we need to re-process
@@ -570,7 +570,13 @@ impl Timeline {
 
         match self
             .last_record_lsn
-            .wait_for_timeout(lsn, self.conf.wait_lsn_timeout)
+            .wait_for_timeout(
+                RecordLsn {
+                    last: lsn,
+                    prev: Lsn::INVALID, // We only use the last value so it does not matter what we put here
+                },
+                self.conf.wait_lsn_timeout,
+            )
             .await
         {
             Ok(()) => Ok(()),
@@ -2691,10 +2697,10 @@ impl Timeline {
         Ok(())
     }
 
-    fn finish_write(&self, new_lsn: Lsn) {
-        assert!(new_lsn.is_aligned());
+    fn finish_write(&self, new_lsn: RecordLsn) {
+        assert!(new_lsn.last.is_aligned());
 
-        self.metrics.last_record_gauge.set(new_lsn.0 as i64);
+        self.metrics.last_record_gauge.set(new_lsn.last.0 as i64);
         self.last_record_lsn.advance(new_lsn);
     }
 
@@ -4826,7 +4832,7 @@ impl<'a> TimelineWriter<'a> {
     /// 'lsn' must be aligned. This wakes up any wait_lsn() callers waiting for
     /// the 'lsn' or anything older. The previous last record LSN is stored alongside
     /// the latest and can be read.
-    pub fn finish_write(&self, new_lsn: Lsn) {
+    pub fn finish_write(&self, new_lsn: RecordLsn) {
         self.tl.finish_write(new_lsn);
     }
 
