@@ -930,7 +930,7 @@ impl WalIngest {
             .await?
         {
             let segpage = segno * pg_constants::SLRU_PAGES_PER_SEGMENT;
-            if slru_may_delete_segment(segpage, xlrec.pageno) {
+            if slru_may_delete_segment(segpage, xlrec.pageno, clogpage_precedes) {
                 modification
                     .drop_slru_segment(SlruKind::Clog, segno, ctx)
                     .await?;
@@ -1117,7 +1117,7 @@ impl WalIngest {
             .await?
         {
             let segpage = segno * pg_constants::SLRU_PAGES_PER_SEGMENT;
-            if slru_may_delete_segment(segpage, pageno) {
+            if slru_may_delete_segment(segpage, pageno, csnlogpage_precedes) {
                 modification
                     .drop_slru_segment(SlruKind::Csn, segno, ctx)
                     .await?;

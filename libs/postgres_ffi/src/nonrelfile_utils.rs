@@ -57,12 +57,16 @@ pub const fn clogpage_precedes(page1: u32, page2: u32) -> bool {
 }
 
 // See SlruMayDeleteSegment() in slru.c
-pub fn slru_may_delete_segment(segpage: u32, cutoff_page: u32) -> bool {
+pub fn slru_may_delete_segment(
+    segpage: u32,
+    cutoff_page: u32,
+    precedes: fn(u32, u32) -> bool,
+) -> bool {
     let seg_last_page = segpage + pg_constants::SLRU_PAGES_PER_SEGMENT - 1;
 
     assert_eq!(segpage % pg_constants::SLRU_PAGES_PER_SEGMENT, 0);
 
-    clogpage_precedes(segpage, cutoff_page) && clogpage_precedes(seg_last_page, cutoff_page)
+    precedes(segpage, cutoff_page) && precedes(seg_last_page, cutoff_page)
 }
 
 // Multixact utils
