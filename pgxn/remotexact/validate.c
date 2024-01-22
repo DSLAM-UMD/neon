@@ -76,7 +76,7 @@ void validate_index_scan(RWSetRelation *rw_rel)
 
     if (page_lsn > read_csn) {
         ereport(ERROR,
-                (errcode(ERRCODE_T_R_STATEMENT_COMPLETION_UNKNOWN),
+                (errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
                  errmsg("[remotexact] read out-of-date index (relid: %u, blockno: %u, csn: %X/%X, readcsn: %X/%X)",
                         relid,
                         rw_rel->pages[i].blkno,
@@ -189,7 +189,7 @@ validate_table_scan(RWSetRelation *rw_rel)
         if (TransactionIdIsValid(checked_xid) &&
             tuple_csn > read_csn)
             ereport(ERROR,
-                    (errcode(ERRCODE_T_R_STATEMENT_COMPLETION_UNKNOWN),
+                    (errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
                      errmsg("[remotexact] read out-of-date table (relid: %u, blockno: %u, offset: %u, csn: %X/%X, readcsn: %X/%X)",
                             relid,
                             ItemPointerGetBlockNumber(&htup->t_self),
@@ -258,7 +258,7 @@ validate_tuple_scan(RWSetRelation *rw_rel)
 
         if (!valid) {
             ereport(ERROR,
-                    (errcode(ERRCODE_T_R_STATEMENT_COMPLETION_UNKNOWN),
+                    (errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
                      errmsg("[remotexact] read out-of-date tuple (relid: %u, blockno: %u, offset: %u, csn: %X/%X, readcsn: %X/%X)",
                             relid,
                             ItemPointerGetBlockNumber(&rw_rel->tuples[i].tid),
