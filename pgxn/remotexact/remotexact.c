@@ -64,8 +64,6 @@ typedef struct CollectedRelation
 
 typedef struct RWSetCollectionBuffer
 {
-	MemoryContext context;
-
 	RWSetHeader header;
 	HTAB	   *collected_relations;
 	StringInfoData writes;
@@ -77,7 +75,10 @@ typedef enum {
 	REMOTE_RELKIND_INDEX,
 } RemoteRelkind;
 
+static MemoryContext RWSetContext = NULL;
 static RWSetCollectionBuffer *rwset_collection_buffer = NULL;
+static MultiRegionXactState multi_region_xact_state = MULTI_REGION_XACT_NONE;
+static StringInfo multi_region_xact_resp = NULL;
 
 PGconn	   *xactserver_conn;
 bool		xactserver_connected = false;
@@ -91,6 +92,7 @@ bool		xactserver_connected = false;
 WaitEventSet *xactserver_conn_wes = NULL;
 
 static void init_rwset_collection_buffer(Oid dbid);
+static void clean_up_rwset_collection_buffer(void);
 static void rwset_add_region(int region);
 
 static void rx_collect_relation(int region, Oid dbid, Oid relid, char relkind);
@@ -100,12 +102,14 @@ static RemoteRelkind get_remote_relkind(char relkind);
 static void rx_collect_insert(Relation relation, HeapTuple newtuple);
 static void rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple);
 static void rx_collect_delete(Relation relation, HeapTuple oldtuple);
-static void rx_execute_remote_xact(void);
+static MultiRegionXactState rx_get_multi_region_xact_state(void);
+static void rx_prepare_multi_region_xact(void);
+static bool rx_commit_multi_region_xact(void);
+static void rx_report_multi_region_xact_error(void);
 
 static CollectedRelation *get_collected_relation(Oid relid, bool create_if_not_found);
 static void xactserver_connect(void);
 static void xactserver_disconnect(void);
-static void check_for_rollback(StringInfo resp_buf);
 static int call_PQgetCopyData(char **buffer);
 static void clean_up_xact_callback(XactEvent event, void *arg);
 
@@ -126,10 +130,9 @@ init_rwset_collection_buffer(Oid dbid)
 		return;
 	}
 
-	old_context = MemoryContextSwitchTo(TopTransactionContext);
+	old_context = MemoryContextSwitchTo(RWSetContext);
 
 	rwset_collection_buffer = (RWSetCollectionBuffer *) palloc(sizeof(RWSetCollectionBuffer));
-	rwset_collection_buffer->context = TopTransactionContext;
 
 	/* Initialize the header */
 	rwset_collection_buffer->header.dbid = dbid;
@@ -137,7 +140,7 @@ init_rwset_collection_buffer(Oid dbid)
 	rwset_collection_buffer->header.region_set = SingleRegion(current_region);
 
 	/* Initialize a map from relation oid to the read set of the relation */
-	hash_ctl.hcxt = rwset_collection_buffer->context;
+	hash_ctl.hcxt = RWSetContext;
 	hash_ctl.keysize = sizeof(CollectedRelationKey);
 	hash_ctl.entrysize = sizeof(CollectedRelation);
 	rwset_collection_buffer->collected_relations = hash_create("collected relations",
@@ -149,6 +152,20 @@ init_rwset_collection_buffer(Oid dbid)
 	initStringInfo(&rwset_collection_buffer->writes);
 
 	MemoryContextSwitchTo(old_context);
+}
+
+static void
+clean_up_rwset_collection_buffer(void)
+{
+	/* Avoid cleaning up the rwset while committing a multi-region transaction */
+	if (multi_region_xact_state == MULTI_REGION_XACT_COMMITTING)
+		return;
+
+	if (rwset_collection_buffer)
+	{
+		rwset_collection_buffer = NULL;
+		MemoryContextReset(RWSetContext);
+	}
 }
 
 static void
@@ -443,8 +460,33 @@ rx_collect_delete(Relation relation, HeapTuple oldtuple)
 	rwset_add_region(region);
 }
 
+static MultiRegionXactState
+rx_get_multi_region_xact_state(void) {
+	if (multi_region_xact_state == MULTI_REGION_XACT_NONE && rwset_collection_buffer != NULL)
+	{
+		RWSetHeader *header = &rwset_collection_buffer->header;
+		/*
+		 * Consider this a multi-region transaction if accessing data from
+		 * remote regions.
+		 */
+		if (header->region_set != SingleRegion(current_region))
+		{
+			multi_region_xact_state = MULTI_REGION_XACT_STARTED;
+		}
+	}
+	return multi_region_xact_state;
+}
+
 static void
-rx_execute_remote_xact(void)
+rx_prepare_multi_region_xact(void)
+{	
+	/* Set this variable to prevent the rwset buffer from 
+	   being cleaned after preparing */
+	multi_region_xact_state = MULTI_REGION_XACT_COMMITTING;
+}
+
+static bool
+rx_commit_multi_region_xact(void)
 {
 	RWSetHeader			*header;
 	CollectedRelation	*relation;
@@ -453,14 +495,17 @@ rx_execute_remote_xact(void)
 	int		read_len = 0;
 	int 	num_read_rels = 0;
 
+	/* Unset this early so that we don't miss it due to the returns */
+	multi_region_xact_state = MULTI_REGION_XACT_NONE;
+
 	if (rwset_collection_buffer == NULL)
-		return;
+		return true;
 
 	header = &rwset_collection_buffer->header;
 
 	/* No need to start a remote xact for a local single-region xact */
 	if (header->region_set == SingleRegion(current_region))
-		return;
+		return true;
 
 	/* Connect to xact server if not done already */
 	if (!xactserver_connected)
@@ -536,6 +581,10 @@ rx_execute_remote_xact(void)
 		remotexact_log(ERROR, "failed to send read/write set: %s", msg);
 	}
 
+	/* Clean up the buffer because it is no longer needed */
+	clean_up_rwset_collection_buffer();
+
+	bool success = false;
 	/* Read the response */
 	PG_TRY();
 	{
@@ -545,10 +594,26 @@ rx_execute_remote_xact(void)
 		rc = call_PQgetCopyData(&resp_buf.data);
 		if (rc >= 0)
 		{
+			int rollbacked_by;
+
 			resp_buf.len = rc;
 			resp_buf.cursor = 0;
-	
-			check_for_rollback(&resp_buf);
+
+			rollbacked_by = pq_getmsgbyte(&resp_buf) - 1;
+
+			resetStringInfo(multi_region_xact_resp);
+
+			/* The first byte is either (region_id + 1), if the transaction was rolled back or 0 otherwise */
+			if (rollbacked_by < 0)
+			{
+				success = true;
+			}
+			else
+			{
+				/* Copy the error to multi_region_xact_resp to be emitted later */
+				appendBinaryStringInfo(multi_region_xact_resp, resp_buf.data, resp_buf.len);
+				success = false;
+			}
 
 			PQfreemem(resp_buf.data);
 		}
@@ -565,22 +630,34 @@ rx_execute_remote_xact(void)
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
+
+	return success;
 }
 
-static void
-check_for_rollback(StringInfo resp_buf)
+void
+rx_report_multi_region_xact_error(void)
 {
 	int rollbacked_by;
 	const char *msg;
 	bool is_sql_error;
 
-	rollbacked_by = pq_getmsgbyte(resp_buf) - 1;
-	/* The first byte is either (region_id + 1), if the transaction was rolled back or 0 otherwise */
-	if (rollbacked_by < 0)
+	/*
+	 * If the response is reset, it means there is no error to report
+	 */
+	if (multi_region_xact_resp == NULL || multi_region_xact_resp->len == 0)
 		return;
 
-	msg = pq_getmsgstring(resp_buf);
-	is_sql_error = pq_getmsgbyte(resp_buf);
+	multi_region_xact_resp->cursor = 0;
+
+	rollbacked_by = pq_getmsgbyte(multi_region_xact_resp) - 1;
+	if (rollbacked_by < 0)
+	{
+		resetStringInfo(multi_region_xact_resp);
+		return;
+	}
+
+	msg = pq_getmsgstring(multi_region_xact_resp);
+	is_sql_error = pq_getmsgbyte(multi_region_xact_resp);
 
 	if (is_sql_error)
 	{
@@ -590,10 +667,10 @@ check_for_rollback(StringInfo resp_buf)
 		const char *hint;
 		StringInfoData s;
 
-		memcpy(code, pq_getmsgbytes(resp_buf, 5), 5);
-		severity = pq_getmsgstring(resp_buf);
-		detail = pq_getmsgstring(resp_buf);
-		hint = pq_getmsgstring(resp_buf);
+		memcpy(code, pq_getmsgbytes(multi_region_xact_resp, 5), 5);
+		severity = pq_getmsgstring(multi_region_xact_resp);
+		detail = pq_getmsgstring(multi_region_xact_resp);
+		hint = pq_getmsgstring(multi_region_xact_resp);
 
 		initStringInfo(&s);
 		appendStringInfo(&s, "%s: %s.", severity, msg);
@@ -602,7 +679,7 @@ check_for_rollback(StringInfo resp_buf)
 		if (hint[0] != '\0')
 			appendStringInfo(&s, " HINT: %s.", hint);
 
-		PQfreemem(resp_buf->data);
+		resetStringInfo(multi_region_xact_resp);
 		ereport(ERROR,
 				(errcode(MAKE_SQLSTATE(code[0], code[1], code[2], code[3], code[4])),
 				 errmsg("[remotexact] validation failed during commit"),
@@ -610,7 +687,7 @@ check_for_rollback(StringInfo resp_buf)
 	}
 	else
 	{
-		PQfreemem(resp_buf->data);
+		resetStringInfo(multi_region_xact_resp);
 		ereport(ERROR,
 				(errcode(ERRCODE_TRANSACTION_ROLLBACK),
 				 errmsg("[remotexact] an error occured during commit"),
@@ -675,7 +752,7 @@ get_collected_relation(Oid relid, bool create_if_not_found)
 		{
 			MemoryContext old_context;
 
-			old_context = MemoryContextSwitchTo(rwset_collection_buffer->context);
+			old_context = MemoryContextSwitchTo(RWSetContext);
 
 			relation->nitems = 0;
 			relation->region = UNKNOWN_REGION;
@@ -803,7 +880,7 @@ clean_up_xact_callback(XactEvent event, void *arg)
 		case XACT_EVENT_COMMIT:
 		case XACT_EVENT_PARALLEL_COMMIT:
 		case XACT_EVENT_PREPARE:
-			rwset_collection_buffer = NULL;
+			clean_up_rwset_collection_buffer();
 			break;
 		case XACT_EVENT_PRE_COMMIT:
 		case XACT_EVENT_PARALLEL_PRE_COMMIT:
@@ -820,7 +897,10 @@ static const RemoteXactHook remote_xact_hook =
 	.collect_insert = rx_collect_insert,
 	.collect_update = rx_collect_update,
 	.collect_delete = rx_collect_delete,
-	.execute_remote_xact = rx_execute_remote_xact
+	.get_multi_region_xact_state = rx_get_multi_region_xact_state,
+	.prepare_multi_region_xact = rx_prepare_multi_region_xact,
+	.commit_multi_region_xact = rx_commit_multi_region_xact,
+	.report_multi_region_xact_error = rx_report_multi_region_xact_error
 };
 
 void
@@ -864,6 +944,16 @@ _PG_init(void)
 
 	if (remotexact_connstring && remotexact_connstring[0])
 	{
+		MemoryContext old_context;
+
+		old_context = MemoryContextSwitchTo(TopMemoryContext);
+		multi_region_xact_resp = makeStringInfo();
+		MemoryContextSwitchTo(old_context);
+
+		RWSetContext = AllocSetContextCreate(TopMemoryContext,
+											 "RWSetContext",
+											 ALLOCSET_DEFAULT_SIZES);
+
 		SetRemoteXactHook(&remote_xact_hook);
 		RegisterXactCallback(clean_up_xact_callback, NULL);
 

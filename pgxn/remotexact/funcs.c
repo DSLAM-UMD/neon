@@ -105,12 +105,6 @@ validate_and_apply_xact(PG_FUNCTION_ARGS)
 	int i;
 
 	/*
-	 * Signify that this is a surrogate transaction. This
-	 * variable will be reset on transaction completion.
-	 */
-	is_surrogate = true;
-
-	/*
 	 * Decode the buffer into a rwset and sort the relations.
 	 */
 	rwset = RWSetAllocate();
@@ -174,6 +168,8 @@ validate_and_apply_xact(PG_FUNCTION_ARGS)
 	MyProc->isRemoteXact = false;
 	pg_write_barrier();
 
+	Assert(GetMultiRegionXactState() == MULTI_REGION_XACT_NONE);
+	
 	PG_RETURN_VOID();
 }
 
