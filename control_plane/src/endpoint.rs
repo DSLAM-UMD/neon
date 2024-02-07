@@ -463,7 +463,7 @@ impl Endpoint {
         auth_token: &Option<String>,
         safekeepers: Vec<NodeId>,
         remote_ext_config: Option<&String>,
-        _valgrind: Option<&String>, // TODO (ctring): cannot use valgrind at the moment
+        valgrind: Option<&String>,
     ) -> Result<()> {
         if self.status() == "running" {
             anyhow::bail!("The endpoint is already running");
@@ -567,6 +567,10 @@ impl Endpoint {
 
         if let Some(remote_ext_config) = remote_ext_config {
             cmd.args(["--remote-ext-config", remote_ext_config]);
+        }
+
+        if let Some(valgrind) = valgrind {
+            cmd.args(["--valgrind", valgrind]);
         }
 
         let child = cmd.spawn()?;
