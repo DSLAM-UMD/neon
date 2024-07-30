@@ -14,6 +14,7 @@ publish = false
 ### BEGIN HAKARI SECTION
 [dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
+byteorder = { version = "1" }
 bytes = { version = "1", features = ["serde"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive", "string"] }
@@ -27,6 +28,7 @@ futures-core = { version = "0.3" }
 futures-executor = { version = "0.3" }
 futures-sink = { version = "0.3" }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
+hashbrown = { version = "0.14", features = ["raw"] }
 itertools = { version = "0.10" }
 libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
@@ -38,13 +40,15 @@ num-traits = { version = "0.2", features = ["i128"] }
 prost = { version = "0.11" }
 rand = { version = "0.8", features = ["small_rng"] }
 regex = { version = "1" }
-regex-syntax = { version = "0.7" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "dfa-search", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
+regex-syntax = { version = "0.8" }
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 ring = { version = "0.16", features = ["std"] }
 rustls = { version = "0.20", features = ["dangerous_configuration"] }
 scopeguard = { version = "1" }
 serde = { version = "1", features = ["alloc", "derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+smallvec = { version = "1", default-features = false, features = ["write"] }
 socket2 = { version = "0.4", default-features = false, features = ["all"] }
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "test-util"] }
 tokio-rustls = { version = "0.23" }
@@ -55,25 +59,33 @@ tower = { version = "0.4", features = ["balance", "buffer", "limit", "retry", "t
 tracing = { version = "0.1", features = ["log"] }
 tracing-core = { version = "0.1" }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "json", "smallvec", "tracing-log"] }
+unicode-bidi = { version = "0.3" }
+unicode-normalization = { version = "0.1" }
 url = { version = "2", features = ["serde"] }
+zerocopy = { version = "0.7", features = ["simd"] }
 
 [build-dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
+byteorder = { version = "1" }
 bytes = { version = "1", features = ["serde"] }
 cc = { version = "1", default-features = false, features = ["parallel"] }
 either = { version = "1" }
+hashbrown = { version = "0.14", features = ["raw"] }
 itertools = { version = "0.10" }
 libc = { version = "0.2", features = ["extra_traits"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
 memchr = { version = "2" }
 nom = { version = "7" }
+proc-macro2 = { version = "1" }
 prost = { version = "0.11" }
+quote = { version = "1" }
 regex = { version = "1" }
-regex-syntax = { version = "0.7" }
+regex-automata = { version = "0.4", default-features = false, features = ["dfa-onepass", "dfa-search", "hybrid", "meta", "nfa-backtrack", "perf-inline", "perf-literal", "unicode"] }
+regex-syntax = { version = "0.8" }
 serde = { version = "1", features = ["alloc", "derive"] }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["extra-traits", "full", "visit-mut"] }
 toml_datetime = { version = "0.6", default-features = false, features = ["serde"] }
-toml_edit = { version = "0.19", features = ["serde"] }
+zerocopy = { version = "0.7", features = ["simd"] }
 
 ### END HAKARI SECTION

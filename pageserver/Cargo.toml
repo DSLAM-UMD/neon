@@ -36,7 +36,7 @@ hyper.workspace = true
 itertools.workspace = true
 nix.workspace = true
 # hack to get the number of worker threads tokio uses
-num_cpus = { version = "1.15" }
+num_cpus = { version = "1.16" }
 num-traits.workspace = true
 once_cell.workspace = true
 pin-project-lite.workspace = true
