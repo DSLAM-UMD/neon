@@ -160,14 +160,6 @@ validate_and_apply_xact(PG_FUNCTION_ARGS)
 	 */
 	RWSetFree(rwset);
 
-	/*
-	 * Mark the xact as local because validation is complete by unsetting the
-	 * isRemoteXact flag in MyProc. We don't lock the ProcArray because its
-	 * our own process.
-	 */
-	MyProc->isRemoteXact = false;
-	pg_write_barrier();
-
 	Assert(GetMultiRegionXactState() == MULTI_REGION_XACT_NONE);
 	
 	PG_RETURN_VOID();

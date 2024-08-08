@@ -865,14 +865,6 @@ xactserver_disconnect(void)
 static void
 clean_up_xact_callback(XactEvent event, void *arg)
 {
-	/* 
-	 * Unset the PROC_IS_REMOTEXACT statusFlag for MyProc once the remotexact
-	 * completes its execution. We don't need to lock the ProcArray because we
-	 * are writing to out own process.
-	 */
-	MyProc->isRemoteXact = false;
-	pg_write_barrier();
-
 	switch (event)
 	{
 		case XACT_EVENT_ABORT:
@@ -880,6 +872,13 @@ clean_up_xact_callback(XactEvent event, void *arg)
 		case XACT_EVENT_COMMIT:
 		case XACT_EVENT_PARALLEL_COMMIT:
 		case XACT_EVENT_PREPARE:
+			/*
+			 * Unset the PROC_IS_REMOTEXACT statusFlag for MyProc once the remotexact
+			 * completes its execution. We don't need to lock the ProcArray because we
+			 * are writing to out own process.
+			 */
+			MyProc->isRemoteXact = false;
+			pg_write_barrier();
 			clean_up_rwset_collection_buffer();
 			break;
 		case XACT_EVENT_PRE_COMMIT:
